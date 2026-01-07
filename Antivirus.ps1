@@ -159,9 +159,14 @@ function Copy-ModulesToProgramData {
         foreach ($module in $modules) {
             try {
                 $destPath = Join-Path $DestinationPath $module.Name
-                Copy-Item -Path $module.FullName -Destination $destPath -Force
+                # Only copy if source and destination are different
+                if ($module.FullName -ne $destPath) {
+                    Copy-Item -Path $module.FullName -Destination $destPath -Force
+                    Write-Log "Copied module: $($module.Name)" -Level Debug
+                } else {
+                    Write-Log "Module already in place: $($module.Name)" -Level Debug
+                }
                 $copiedCount++
-                Write-Log "Copied module: $($module.Name)" -Level Debug
             } catch {
                 Write-Log "Failed to copy $($module.Name): $_" -Level Error
             }
@@ -656,16 +661,24 @@ function Start-AntivirusOrchestrator {
     Write-Log "Found $($modules.Count) modules to start" -Level Info
     
     $startedCount = 0
+    $attemptedCount = 0
     foreach ($module in $modules) {
         if ($startedCount -lt $Script:Configuration.MaxConcurrentModules) {
+            $attemptedCount++
+            Write-Log "Attempting to start module: $($module.Name)" -Level Debug
             if (Start-ModuleJob -ModuleInfo $module -Config $Script:Configuration) {
                 $startedCount++
+                Write-Log "Successfully started module: $($module.Name)" -Level Info
+            } else {
+                Write-Log "Failed to start module: $($module.Name)" -Level Warning
             }
             Start-Sleep -Milliseconds 500
+        } else {
+            Write-Log "Skipping module $($module.Name) - max concurrent limit reached" -Level Warning
         }
     }
     
-    Write-Log "Started $startedCount modules" -Level Info
+    Write-Log "Started $startedCount/$attemptedCount modules (limit: $($Script:Configuration.MaxConcurrentModules))" -Level Info
     
     # Main monitoring loop
     $lastHealthCheck = Get-Date
