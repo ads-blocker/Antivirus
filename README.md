@@ -1,230 +1,350 @@
-# Enterprise EDR Antivirus System
+# 🛡️ Enterprise EDR Antivirus
 
-A production-ready, enterprise-grade Endpoint Detection and Response (EDR) system with 42 specialized detection and monitoring modules.
+A comprehensive Enterprise Detection and Response (EDR) system built with PowerShell, featuring modular standalone agents for real-time threat detection and automated response capabilities.
 
-## Features
+## 🌟 Features
 
-- **Hot-Swap Module Support**: Modules can be updated without stopping the orchestrator
-- **Managed Tick Jobs**: Low RAM usage through efficient timed execution
-- **Module Health Monitoring**: Automatic detection and restart of failed modules
-- **Automatic Response Engine**: Centralized threat response system that automatically quarantines, kills processes, blocks network connections, and alerts based on threat severity
-- **Comprehensive Logging**: All detections logged to Event Log and file system
-- **Enterprise-Ready**: Production-grade error handling and resource management
+### 🔍 **Multi-Vector Threat Detection**
+- **AMSI Bypass Detection** - Identifies PowerShell AMSI circumvention attempts
+- **Process Anomaly Detection** - Detects suspicious process behavior and creation patterns
+- **Memory Scanning** - Monitors process memory for malicious injections and unusual allocations
+- **Network Threat Detection** - Identifies data exfiltration, DNS tunneling, and anomalous traffic
+- **Registry Persistence Detection** - Detects registry-based persistence mechanisms
+- **File System Monitoring** - Monitors for ransomware, file entropy, and suspicious modifications
+- **Rootkit Detection** - Identifies kernel-level and user-mode rootkit indicators
+- **USB Device Monitoring** - Tracks unauthorized USB device connections and activities
+- **Webcam Protection** - Prevents unauthorized webcam access and monitoring
+- **Service Monitoring** - Detects malicious service creation and modifications
+- **Scheduled Task Analysis** - Identifies suspicious scheduled task creation
+- **WMI Persistence Detection** - Monitors WMI-based persistence mechanisms
+- **Token Manipulation Detection** - Identifies privilege escalation attempts
+- **Shadow Copy Monitoring** - Detects shadow copy manipulation and deletion
+- **DLL Injection Detection** - Identifies reflective DLL and code injection techniques
+- **Browser Extension Monitoring** - Detects malicious browser extensions
+- **Clipboard Monitoring** - Monitors for clipboard data theft
+- **Credential Dump Detection** - Identifies credential harvesting attempts
+- **LOLBin Detection** - Detects Living-Off-the-Land binary abuse
+- **Firewall Rule Monitoring** - Tracks suspicious firewall modifications
+- **Data Exfiltration Detection** - Comprehensive outbound data transfer monitoring
+- **Event Log Monitoring** - Analyzes Windows Event Logs for threat indicators
+- **Named Pipe Monitoring** - Detects malicious named pipe usage
+- **COM Object Monitoring** - Identifies suspicious COM object usage
+- **Process Hollowing Detection** - Detects process hollowing techniques
+- **Lateral Movement Detection** - Identifies network lateral movement attempts
+- **Hash Detection** - Monitors file hashes against threat intelligence
+- **Honeypot Module** - Decoy resources to attract and detect attackers
+- **Beacon Detection** - Identifies C2 communication beacons
+- **Fileless Detection** - Detects fileless malware techniques
+- **ELF Catcher** - Linux executable detection in Windows environments
 
-## Architecture
+### 🤖 **Automated Response System**
+- **Quarantine Management** - Automatic file isolation and recovery
+- **Process Termination** - Automated killing of malicious processes
+- **Network Blocking** - Dynamic network access restriction
+- **Alert Generation** - Real-time notifications and escalation
+- **Comprehensive Logging** - Detailed audit trails and forensic data
 
-### Main Orchestrator (`Antivirus.ps1`)
-- Manages all detection modules
-- Handles module deployment to ProgramData
-- Monitors module health and auto-restarts failed modules
-- Performs hot-swap module updates
-- Provides centralized logging and event reporting
+### 🏗️ **Architecture**
+- **Standalone Agents** - Each detection module operates independently
+- **Centralized Response** - Unified response engine coordinates all actions
+- **Event-Driven** - Real-time detection and response capabilities
+- **Scalable Design** - Modular architecture allows easy expansion
+- **Low Resource Impact** - Optimized for enterprise environments
 
-### Response Engine (`ResponseEngine.ps1`)
-- **Automatic Threat Response**: Processes all detections from all modules
-- **Severity-Based Actions**:
-  - **Critical**: Quarantine files, Kill processes, Block network connections, Log, Alert
-  - **High**: Quarantine files, Log, Alert
-  - **Medium**: Log, Alert
-  - **Low**: Log only
-- **Real-Time Processing**: Monitors detection logs and Event Log continuously
-- **Action Tracking**: Logs all response actions for audit purposes
+## 🚀 Quick Start
 
-### Detection Modules (42 Total)
-
-1. **HashDetection** - Malware hash-based detection
-2. **LOLBinDetection** - Living-Off-The-Land binary detection
-3. **ProcessAnomalyDetection** - Unusual process behavior detection
-4. **AMSIBypassDetection** - Enhanced AMSI bypass attempt detection (includes obfuscated bypass detection)
-5. **CredentialDumpDetection** - Credential dumping tool detection
-6. **WMIPersistenceDetection** - WMI-based persistence detection
-7. **ScheduledTaskDetection** - Malicious scheduled task detection
-8. **RegistryPersistenceDetection** - Registry-based persistence detection
-9. **DLLHijackingDetection** - DLL hijacking detection
-10. **TokenManipulationDetection** - Token theft and impersonation detection
-11. **ProcessHollowingDetection** - Process hollowing attack detection
-12. **KeyloggerDetection** - Keylogger detection
-13. **KeyScramblerManagement** - Keyboard encryption management
-14. **RansomwareDetection** - Ransomware encryption pattern detection
-15. **NetworkAnomalyDetection** - Unusual network activity detection
-16. **NetworkTrafficMonitoring** - Comprehensive network traffic monitoring
-17. **RootkitDetection** - Rootkit installation and activity detection
-18. **ClipboardMonitoring** - Clipboard content monitoring for sensitive data
-19. **COMMonitoring** - COM object instantiation monitoring
-20. **BrowserExtensionMonitoring** - Browser extension security monitoring
-21. **ShadowCopyMonitoring** - Shadow copy deletion monitoring (ransomware indicator)
-22. **USBMonitoring** - USB device connection monitoring
-23. **EventLogMonitoring** - Security event log monitoring
-24. **FirewallRuleMonitoring** - Firewall rule change monitoring
-25. **ServiceMonitoring** - Windows service monitoring
-26. **FilelessDetection** - Fileless malware detection
-27. **MemoryScanning** - Process memory scanning
-28. **NamedPipeMonitoring** - Named pipe communication monitoring
-29. **DNSExfiltrationDetection** - DNS-based data exfiltration detection
-30. **PasswordManagement** - Password policy and storage monitoring
-31. **WebcamGuardian** - Webcam access monitoring and protection
-32. **ElfCatcher** - Browser DLL injection monitoring (detects suspicious DLLs like _elf.dll patterns)
-33. **FileEntropyDetection** - Packed/encrypted file detection via entropy analysis
-34. **QuarantineManagement** - File quarantine operations and tracking
-35. **ProcessCreationDetection** - Process creation anomaly detection
-36. **ReflectiveDLLInjectionDetection** - Reflective DLL injection and memory-only DLL detection
-37. **ResponseEngine** - Centralized automatic threat response system
-38. **BeaconDetection** - C2 beaconing and command & control communication detection
-39. **CodeInjectionDetection** - Various code injection technique detection
-40. **LateralMovementDetection** - Lateral movement techniques (SMB, RDP, WMI, PsExec)
-41. **DataExfiltrationDetection** - Comprehensive data exfiltration detection
-42. **HoneypotModule** - Decoy file creation and monitoring for threat detection
-
-## Installation
-
-1. Place all files in a directory (e.g., `C:\Antivirus`)
-2. Ensure PowerShell execution policy allows script execution:
-   ```powershell
-   Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
-   ```
-
-3. Run with elevated privileges (Administrator):
-   ```powershell
-   .\Antivirus.ps1
-   ```
-
-## Usage
-
-### Basic Usage
-```powershell
-.\Antivirus.ps1
-```
-
-### Advanced Options
-```powershell
-# Custom tick interval (seconds)
-.\Antivirus.ps1 -TickInterval 60
-
-# Custom module path
-.\Antivirus.ps1 -ModulesPath "C:\Custom\Modules"
-
-# Custom ProgramData path
-.\Antivirus.ps1 -ProgramDataPath "C:\Custom\ProgramData\Antivirus\Modules"
-
-# Run as service
-.\Antivirus.ps1 -RunAsService
-
-# Enable detailed logging
-.\Antivirus.ps1 -Configuration @{EnableDetailedLogging=$true}
-```
-
-## Module Hot-Swapping
-
-1. Update any `.ps1` file in the `modules` directory
-2. The orchestrator will automatically detect changes every 5 minutes
-3. Running modules will be stopped and restarted with the new version
-4. No system restart required
-
-## Module Health Monitoring
-
-- **Automatic Health Checks**: Every 60 seconds
-- **Error Threshold**: Modules exceeding 3 errors are disabled
-- **Auto-Restart**: Failed modules automatically restart below threshold
-- **Timeout Protection**: Modules timing out (>300 seconds) are restarted
-
-## Logging
-
-### Event Log
-- Source: `AntivirusEDR`
-- Log: `Application`
-- Event IDs: 2001-2041 (module-specific), 2100+ (ResponseEngine actions)
-- Response Actions: Event ID 2100+ for automatic response actions
-
-### File Logs
-- Location: `%ProgramData%\Antivirus\Logs\`
-- Format: `ModuleName_YYYY-MM-DD.log`
-- Main Log: `Antivirus_YYYY-MM-DD.log`
-
-## Module Structure
-
-Each module follows a consistent structure:
-- `Start-Module` function (entry point)
-- `Invoke-ModuleScan` function (detection logic)
-- Managed tick job with configurable intervals
-- Standard output format: `STATS:`, `DETECTION:`, `ERROR:`
-- Event Log integration
-
-## Configuration
-
-Module configuration is passed via `$ModuleConfig` hashtable:
-- `TickInterval`: Execution interval in seconds
-- `MaxConcurrentModules`: Maximum modules running simultaneously
-- `ModuleTimeout`: Module execution timeout
-- `ErrorThreshold`: Maximum errors before disable
-
-## Requirements
-
-- PowerShell 5.1 or higher
+### Prerequisites
 - Windows 10/11 or Windows Server 2016+
-- Administrative privileges
-- Execution policy allowing script execution
+- PowerShell 5.1+ (PowerShell 7+ recommended)
+- Administrative privileges for installation
 
-## Performance
+### Installation
 
-- **Low RAM Usage**: Managed tick jobs prevent memory buildup
-- **Efficient Scanning**: Configurable intervals prevent resource exhaustion
-- **Concurrent Execution**: Multiple modules run simultaneously (up to 10 by default)
-- **Non-Blocking**: Modules run in background jobs
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/your-org/enterprise-edr-antivirus.git
+   cd enterprise-edr-antivirus
+   ```
 
-## Security
+2. **Run the setup script**
+   ```cmd
+   Setup.cmd
+   ```
+   *This will:*
+   - Elevate privileges automatically
+   - Install all detection agents to `C:\ProgramData\Antivirus\`
+   - Create scheduled tasks for automatic startup
+   - Initialize logging and configuration systems
 
-- All detections are logged with timestamps
-- **Automatic Response**: Critical/High threats are automatically quarantined, processes killed, and network connections blocked
-- Event Log integration for SIEM compatibility
-- Detailed file-based logging for forensic analysis
-- Error handling prevents system crashes
-- Module isolation prevents cross-module interference
-- **Honeypot Files**: Decoy files detect unauthorized access attempts
-- **Quarantine System**: Infected files are automatically moved to quarantine with hash tracking
+3. **Verify installation**
+   ```powershell
+   # Check if scheduled task was created
+   Get-ScheduledTask -TaskName "Antivirus"
+   
+   # Check agent status
+   Get-Content "C:\ProgramData\Antivirus\Data\agent_status.json"
+   ```
 
-## Response Actions
+### Manual Deployment
 
-The ResponseEngine automatically takes actions based on threat severity:
+For custom deployments, copy all files from the `Bin/` directory to your desired location and run:
+```cmd
+Antivirus.cmd
+```
 
-| Severity | Actions |
-|----------|---------|
-| **Critical** | Quarantine file, Kill process, Block network, Log, Alert |
-| **High** | Quarantine file, Log, Alert |
-| **Medium** | Log, Alert |
-| **Low** | Log only |
+## 📁 Project Structure
 
-Response actions are logged to:
-- Event Log (Event ID 2100+)
-- `ResponseEngine_YYYY-MM-DD.log`
-- Module-specific detection logs
+```
+enterprise-edr-antivirus/
+├── Setup.cmd                    # Installation script
+├── Bin/                         # All detection and response modules
+│   ├── Antivirus.cmd           # Main agent launcher
+│   ├── Antivirus.xml           # Scheduled task configuration
+│   ├── Initializer.ps1         # Environment initialization agent
+│   ├── ResponseEngine.ps1       # Centralized response coordinator
+│   ├── QuarantineManagement.ps1 # File quarantine operations
+│   ├── AMSIBypassDetection.ps1  # AMSI bypass detection
+│   ├── ProcessAnomalyDetection.ps1 # Process behavior analysis
+│   ├── MemoryScanning.ps1       # Memory threat detection
+│   ├── NetworkAnomalyDetection.ps1 # Network threat analysis
+│   ├── RegistryPersistenceDetection.ps1 # Registry monitoring
+│   ├── RansomwareDetection.ps1  # Ransomware detection
+│   ├── RootkitDetection.ps1     # Rootkit identification
+│   ├── USBMonitoring.ps1        # USB device monitoring
+│   ├── WebcamGuardian.ps1       # Webcam protection
+│   ├── ServiceMonitoring.ps1    # Service analysis
+│   ├── ScheduledTaskDetection.ps1 # Task monitoring
+│   ├── WMIPersistenceDetection.ps1 # WMI persistence
+│   ├── TokenManipulationDetection.ps1 # Privilege escalation
+│   ├── ShadowCopyMonitoring.ps1 # Shadow copy analysis
+│   ├── ReflectiveDLLInjectionDetection.ps1 # DLL injection
+│   ├── BrowserExtensionMonitoring.ps1 # Browser security
+│   ├── ClipboardMonitoring.ps1  # Clipboard protection
+│   ├── CredentialDumpDetection.ps1 # Credential theft
+│   ├── LOLBinDetection.ps1      # LOLBin abuse
+│   ├── FirewallRuleMonitoring.ps1 # Firewall monitoring
+│   ├── DataExfiltrationDetection.ps1 # Data theft detection
+│   ├── EventLogMonitoring.ps1   # Event log analysis
+│   ├── NamedPipeMonitoring.ps1  # Named pipe monitoring
+│   ├── COMMonitoring.ps1        # COM object monitoring
+│   ├── ProcessHollowingDetection.ps1 # Process hollowing
+│   ├── LateralMovementDetection.ps1 # Lateral movement
+│   ├── HashDetection.ps1        # Hash-based detection
+│   ├── HoneypotModule.ps1       # Honeypot decoys
+│   ├── BeaconDetection.ps1      # C2 beacon detection
+│   ├── FilelessDetection.ps1    # Fileless malware
+│   ├── ElfCatcher.ps1           # Linux executable detection
+│   ├── ProcessCreationDetection.ps1 # Process creation
+│   ├── PasswordManagement.ps1   # Password security
+│   ├── NetworkTrafficMonitoring.ps1 # Traffic analysis
+│   ├── FileEntropyDetection.ps1 # File analysis
+│   └── KeyScramblerManagement.ps1 # Key protection
+├── README.md                    # This file
+└── LICENSE                      # License information
+```
 
-## Troubleshooting
+## ⚙️ Configuration
 
-### Module Not Starting
-- Check Event Log for errors
-- Verify module syntax with: `powershell -File modules\ModuleName.ps1`
-- Check ProgramData path permissions
+### Agent Configuration
+Each agent can be configured independently by passing a hashtable configuration:
 
-### High CPU Usage
-- Increase `TickInterval` for affected modules
-- Reduce number of concurrent modules
-- Check for infinite loops in module code
+```powershell
+# Example: Configure AMSI detection with custom interval
+@{
+    TickInterval = 15  # Check every 15 seconds instead of default 30
+    Sensitivity = "High"
+    LogLevel = "Verbose"
+}
+```
 
-### No Detections
-- Verify modules are running: Check orchestrator output
-- Review module logs in `%ProgramData%\Antivirus\Logs\`
-- Ensure modules have necessary permissions
+### Global Configuration
+Main configuration is stored in `C:\ProgramData\Antivirus\Data\config.json`:
 
-### Response Engine Not Acting
-- Check `ResponseEngine_YYYY-MM-DD.log` for processing status
-- Verify threat severity levels are set correctly
-- Check Event Log for ResponseEngine events (2100+)
-- Ensure quarantine directory has write permissions
+```json
+{
+    "Version": "1.0",
+    "Settings": {
+        "MaxLogSizeMB": 100,
+        "QuarantineRetentionDays": 30,
+        "EnableRealTimeResponse": true,
+        "ResponseSeverity": "Medium"
+    }
+}
+```
 
-## License
+### Response Engine Configuration
+Configure automated response actions by severity level:
 
-Enterprise EDR Antivirus System - Production Ready
+- **Critical**: Quarantine + Kill Process + Block Network + Log
+- **High**: Quarantine + Log + Alert
+- **Medium**: Log + Alert
+- **Low**: Log only
 
-## Support
+## 📊 Monitoring and Logging
 
-For issues or enhancements, review module logs and Event Log entries.
+### Log Locations
+- **System Logs**: `C:\ProgramData\Antivirus\Logs\System_YYYY-MM-DD.log`
+- **Threat Logs**: `C:\ProgramData\Antivirus\Logs\Threats_YYYY-MM-DD.log`
+- **Response Logs**: `C:\ProgramData\Antivirus\Logs\Responses_YYYY-MM-DD.log`
+- **Agent-Specific Logs**: `C:\ProgramData\Antivirus\Logs\[ModuleName]_YYYY-MM-DD.log`
+
+### Windows Event Log
+All detections are logged to the Windows Application Event Log with source `AntivirusEDR`.
+
+### Real-time Monitoring
+Monitor agent activity in real-time:
+```powershell
+Get-Content "C:\ProgramData\Antivirus\Logs\System_$(Get-Date -Format 'yyyy-MM-dd').log" -Wait
+```
+
+## 🔧 Management
+
+### Start/Stop Agents
+```powershell
+# Start all agents
+& "C:\ProgramData\Antivirus\Antivirus.cmd"
+
+# Stop all agents
+Get-Process powershell | Where-Object {$_.CommandLine -match "Antivirus"} | Stop-Process
+
+# Check agent status
+Get-Content "C:\ProgramData\Antivirus\Data\agent_status.json"
+```
+
+### Update Agents
+To update individual agents, replace the `.ps1` files in `C:\ProgramData\Antivirus\` and restart the system or agents.
+
+### Quarantine Management
+```powershell
+# View quarantined files
+Get-ChildItem "C:\ProgramData\Antivirus\Quarantine"
+
+# Restore quarantined file
+& "C:\ProgramData\Antivirus\QuarantineManagement.ps1" -Action Restore -FilePath "quarantined_file.txt"
+
+# View quarantine log
+Get-Content "C:\ProgramData\Antivirus\Quarantine\quarantine_log.txt"
+```
+
+## 🛠️ Customization
+
+### Adding New Detection Modules
+1. Create a new `.ps1` file following the standard template:
+```powershell
+param([hashtable]$ModuleConfig)
+
+$ModuleName = "YourModuleName"
+$LastTick = Get-Date
+$TickInterval = if ($ModuleConfig.TickInterval) { $ModuleConfig.TickInterval } else { 30 }
+
+function Invoke-YourDetection {
+    # Your detection logic here
+    return $detections.Count
+}
+
+function Start-Module {
+    param([hashtable]$Config)
+    
+    while ($true) {
+        try {
+            $now = Get-Date
+            if (($now - $LastTick).TotalSeconds -ge $TickInterval) {
+                $count = Invoke-YourDetection
+                $LastTick = $now
+                Write-Output "STATS:$ModuleName`:Detections=$count"
+            }
+            Start-Sleep -Seconds 5
+        } catch {
+            Write-Output "ERROR:$ModuleName`:$_"
+            Start-Sleep -Seconds 10
+        }
+    }
+}
+
+if (-not $ModuleConfig) {
+    Start-Module -Config @{ TickInterval = 30 }
+}
+```
+
+2. Place the file in the `Bin/` directory
+3. The agent will be automatically launched by `Antivirus.cmd`
+
+### Custom Response Actions
+Modify `ResponseEngine.ps1` to add custom response actions or integrate with external systems.
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**Agents not starting:**
+- Verify PowerShell execution policy: `Set-ExecutionPolicy Bypass -Scope Process`
+- Check if running as administrator
+- Verify file permissions in `C:\ProgramData\Antivirus\`
+
+**High resource usage:**
+- Increase tick intervals in agent configurations
+- Disable unnecessary detection modules
+- Monitor system performance with Task Manager
+
+**False positives:**
+- Adjust sensitivity settings in individual agents
+- Add exclusions to configuration files
+- Review detection patterns and modify as needed
+
+### Debug Mode
+Enable verbose logging by modifying agent configurations:
+```powershell
+@{
+    TickInterval = 30
+    LogLevel = "Debug"
+    VerboseLogging = $true
+}
+```
+
+## 🤝 Contributing
+
+We welcome contributions! Please follow these guidelines:
+
+1. **Fork the repository**
+2. **Create a feature branch**: `git checkout -b feature/new-detection-module`
+3. **Follow the existing code style and patterns**
+4. **Test thoroughly** in a non-production environment
+5. **Submit a pull request** with detailed description
+
+### Development Guidelines
+- Use PowerShell best practices
+- Include comprehensive error handling
+- Follow the established logging format
+- Document new detection capabilities
+- Test with various Windows versions
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 Support
+
+- **Issues**: Report bugs and feature requests on [GitHub Issues](https://github.com/your-org/enterprise-edr-antivirus/issues)
+- **Discussions**: Join our [GitHub Discussions](https://github.com/your-org/enterprise-edr-antivirus/discussions)
+- **Security**: For security vulnerabilities, email security@your-org.com
+
+## 🙏 Acknowledgments
+
+- PowerShell community for inspiration and techniques
+- Security researchers for detection methodologies
+- Enterprise security teams for feedback and testing
+- Open source contributors who made this project possible
+
+## 📈 Roadmap
+
+- [ ] Web-based management dashboard
+- [ ] SIEM integration (Splunk, ELK, Sentinel)
+- [ ] Machine learning-based anomaly detection
+- [ ] Cloud deployment support
+- [ ] Mobile device management integration
+- [ ] Advanced threat hunting capabilities
+- [ ] API for third-party integrations
+
+---
+
+**⚠️ Disclaimer**: This tool is for educational and authorized security testing purposes only. Users are responsible for ensuring compliance with applicable laws and regulations.
