@@ -8,16 +8,25 @@ param(
     [int]$TickInterval = 30,
     
     [Parameter(Mandatory=$false)]
-    [string]$ModulesPath = "$PSScriptRoot\modules",
+    [string]$ModulesPath = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$ProgramDataPath = "$env:ProgramData\Antivirus\Modules",
+    [string]$ProgramDataPath = "",
     
     [Parameter(Mandatory=$false)]
-    [string]$LogPath = "$env:ProgramData\Antivirus\Logs",
+    [string]$LogPath = "",
     
     [Parameter(Mandatory=$false)]
-    [switch]$RunAsService
+    [switch]$RunAsService,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$Install,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$Uninstall,
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$NoInstall
 )
 
 #region Global Variables
@@ -27,6 +36,35 @@ $Script:ModuleLastError = @{}
 $Script:ModuleStats = @{}
 $Script:IsRunning = $true
 $Script:LockObject = New-Object System.Object
+$Script:InstallPath = "$env:ProgramData\Antivirus"
+$Script:ScriptName = Split-Path -Leaf $PSCommandPath
+
+# Initialize paths - use install location if script is running from there, otherwise use PSScriptRoot
+$targetScript = Join-Path $Script:InstallPath $Script:ScriptName
+if (Test-Path $targetScript -ErrorAction SilentlyContinue) {
+    # Running from install location or installed version exists
+    if ([string]::IsNullOrEmpty($ModulesPath)) {
+        $ModulesPath = "$Script:InstallPath\Modules"
+    }
+    if ([string]::IsNullOrEmpty($ProgramDataPath)) {
+        $ProgramDataPath = "$Script:InstallPath\Modules"
+    }
+    if ([string]::IsNullOrEmpty($LogPath)) {
+        $LogPath = "$Script:InstallPath\Logs"
+    }
+} else {
+    # Running from source location
+    if ([string]::IsNullOrEmpty($ModulesPath)) {
+        $ModulesPath = "$PSScriptRoot\modules"
+    }
+    if ([string]::IsNullOrEmpty($ProgramDataPath)) {
+        $ProgramDataPath = "$env:ProgramData\Antivirus\Modules"
+    }
+    if ([string]::IsNullOrEmpty($LogPath)) {
+        $LogPath = "$env:ProgramData\Antivirus\Logs"
+    }
+}
+
 $Script:Configuration = @{
     TickInterval = $TickInterval
     MaxConcurrentModules = 10
@@ -396,6 +434,205 @@ function Invoke-HotSwapModules {
 }
 #endregion
 
+#region Installation and Persistence
+function Install-Antivirus {
+    $targetScript = Join-Path $Script:InstallPath $Script:ScriptName
+    $currentPath = $PSCommandPath
+    
+    # Check if already installed and running from install location
+    if ($currentPath -eq $targetScript -and (Test-Path $targetScript)) {
+        Write-Log "Running from install location: $targetScript" -Level Info
+        
+        # Verify persistence is still installed
+        $taskName = "AntivirusProtection"
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if (-not $existingTask) {
+            Write-Log "Persistence not found, reinstalling..." -Level Warning
+            Install-Persistence
+        }
+        
+        return $true
+    }
+    
+    Write-Log "=== Installing Antivirus ===" -Level Info
+    Write-Host "`n=== Installing Antivirus ===`n" -ForegroundColor Cyan
+    
+    # Create installation directories
+    $directories = @("Data", "Logs", "Quarantine", "Reports", "Modules")
+    foreach ($dir in $directories) {
+        $dirPath = Join-Path $Script:InstallPath $dir
+        if (-not (Test-Path $dirPath)) {
+            try {
+                New-Item -ItemType Directory -Path $dirPath -Force | Out-Null
+                Write-Log "Created directory: $dirPath" -Level Info
+                Write-Host "[+] Created: $dirPath" -ForegroundColor Green
+            } catch {
+                Write-Log "Failed to create directory $dirPath`: $_" -Level Error
+            }
+        }
+    }
+    
+    # Copy main script to install location
+    try {
+        Copy-Item -Path $PSCommandPath -Destination $targetScript -Force -ErrorAction Stop
+        Write-Log "Copied main script to: $targetScript" -Level Info
+        Write-Host "[+] Copied main script to $targetScript" -ForegroundColor Green
+        
+        # Copy modules directory if it exists
+        if (Test-Path $ModulesPath) {
+            $targetModulesPath = Join-Path $Script:InstallPath "Modules"
+            if (-not (Test-Path $targetModulesPath)) {
+                New-Item -ItemType Directory -Path $targetModulesPath -Force | Out-Null
+            }
+            Copy-Item -Path "$ModulesPath\*" -Destination $targetModulesPath -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Log "Copied modules to: $targetModulesPath" -Level Info
+            Write-Host "[+] Copied modules to $targetModulesPath" -ForegroundColor Green
+        }
+    } catch {
+        Write-Log "Failed to copy script to install location: $_" -Level Error
+        Write-Host "[!] Failed to copy script: $_" -ForegroundColor Red
+        return $false
+    }
+    
+    # Install persistence
+    Install-Persistence
+    
+    Write-Log "Installation complete" -Level Info
+    Write-Host "`n[+] Installation complete. Continuing in this instance...`n" -ForegroundColor Green
+    Write-EventLog "Antivirus installed successfully" -EntryType Information
+    
+    return $true
+}
+
+function Install-Persistence {
+    Write-Log "Setting up persistence for automatic startup" -Level Info
+    Write-Host "`n[*] Setting up persistence for automatic startup...`n" -ForegroundColor Cyan
+    
+    $taskName = "AntivirusProtection"
+    $targetScript = Join-Path $Script:InstallPath $Script:ScriptName
+    
+    # Check if running with admin privileges
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    
+    if (-not $isAdmin) {
+        Write-Log "Warning: Not running as Administrator. Scheduled task creation may fail." -Level Warning
+        Write-Host "[!] Warning: Not running as Administrator. Scheduled task creation may fail." -ForegroundColor Yellow
+    }
+    
+    try {
+        # Remove existing task if it exists
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($existingTask) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+            Write-Log "Removed existing scheduled task: $taskName" -Level Info
+        }
+        
+        # Create scheduled task action
+        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$targetScript`""
+        
+        # Create triggers (at logon and at startup)
+        $taskTriggerLogon = New-ScheduledTaskTrigger -AtLogon -User $env:USERNAME
+        $taskTriggerBoot = New-ScheduledTaskTrigger -AtStartup
+        
+        # Create task principal (run as current user with highest privileges)
+        $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
+        
+        # Create task settings
+        $taskSettings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable `
+            -RunOnlyIfNetworkAvailable `
+            -DontStopOnIdleEnd `
+            -RestartCount 3 `
+            -RestartInterval (New-TimeSpan -Minutes 1)
+        
+        # Register the scheduled task
+        Register-ScheduledTask `
+            -TaskName $taskName `
+            -Action $taskAction `
+            -Trigger $taskTriggerLogon, $taskTriggerBoot `
+            -Principal $taskPrincipal `
+            -Settings $taskSettings `
+            -Description "Enterprise EDR Antivirus - Automatic Protection" `
+            -Force `
+            -ErrorAction Stop
+        
+        Write-Log "Scheduled task created successfully: $taskName" -Level Info
+        Write-Host "[+] Scheduled task created for automatic startup" -ForegroundColor Green
+        Write-EventLog "Antivirus persistence installed - scheduled task created" -EntryType Information
+        
+    } catch {
+        Write-Log "Failed to create scheduled task: $_" -Level Error
+        Write-Host "[!] Failed to create scheduled task: $_" -ForegroundColor Red
+        Write-Host "[*] Attempting fallback: startup shortcut..." -ForegroundColor Yellow
+        
+        # Fallback: Create startup shortcut
+        try {
+            $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+            
+            if (-not (Test-Path $startupFolder)) {
+                New-Item -ItemType Directory -Path $startupFolder -Force | Out-Null
+            }
+            
+            $shortcutPath = Join-Path $startupFolder "AntivirusProtection.lnk"
+            
+            $shell = New-Object -ComObject WScript.Shell
+            $shortcut = $shell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = "powershell.exe"
+            $shortcut.Arguments = "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$targetScript`""
+            $shortcut.WorkingDirectory = $Script:InstallPath
+            $shortcut.WindowStyle = 7  # Minimized
+            $shortcut.Save()
+            
+            Write-Log "Fallback: Created startup shortcut at: $shortcutPath" -Level Info
+            Write-Host "[+] Fallback: Created startup shortcut" -ForegroundColor Yellow
+            Write-EventLog "Antivirus persistence installed - startup shortcut created" -EntryType Information
+            
+        } catch {
+            Write-Log "Both scheduled task and shortcut failed: $_" -Level Error
+            Write-Host "[!] Both scheduled task and shortcut failed: $_" -ForegroundColor Red
+            Write-EventLog "Antivirus persistence installation failed: $_" -EntryType Error
+        }
+    }
+}
+
+function Uninstall-Antivirus {
+    Write-Log "=== Uninstalling Antivirus ===" -Level Info
+    Write-Host "`n=== Uninstalling Antivirus ===`n" -ForegroundColor Cyan
+    
+    # Remove scheduled task
+    try {
+        $taskName = "AntivirusProtection"
+        $existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($existingTask) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+            Write-Log "Removed scheduled task: $taskName" -Level Info
+            Write-Host "[+] Removed scheduled task" -ForegroundColor Green
+        }
+    } catch {
+        Write-Log "Failed to remove scheduled task: $_" -Level Warning
+    }
+    
+    # Remove startup shortcut
+    try {
+        $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+        $shortcutPath = Join-Path $startupFolder "AntivirusProtection.lnk"
+        if (Test-Path $shortcutPath) {
+            Remove-Item -Path $shortcutPath -Force -ErrorAction Stop
+            Write-Log "Removed startup shortcut: $shortcutPath" -Level Info
+            Write-Host "[+] Removed startup shortcut" -ForegroundColor Green
+        }
+    } catch {
+        Write-Log "Failed to remove startup shortcut: $_" -Level Warning
+    }
+    
+    Write-Log "Uninstallation complete" -Level Info
+    Write-Host "[+] Uninstallation complete" -ForegroundColor Green
+    Write-EventLog "Antivirus uninstalled" -EntryType Information
+}
+#endregion
+
 #region Main Execution
 function Start-AntivirusOrchestrator {
     Write-Log "=== Antivirus EDR Orchestrator Starting ===" -Level Info
@@ -495,11 +732,21 @@ trap {
     break
 }
 
+# Handle uninstallation
+if ($Uninstall) {
+    Uninstall-Antivirus
+    exit 0
+}
+
+# Automatic installation and persistence on first run
+Install-Antivirus
+
 # Start orchestrator
 if ($RunAsService) {
     Start-AntivirusOrchestrator
 } else {
     Write-Host "Antivirus EDR Orchestrator" -ForegroundColor Cyan
+    Write-Host "Install Path: $Script:InstallPath" -ForegroundColor Gray
     Write-Host "Modules Path: $ModulesPath" -ForegroundColor Gray
     Write-Host "ProgramData Path: $ProgramDataPath" -ForegroundColor Gray
     Write-Host "Log Path: $LogPath" -ForegroundColor Gray
