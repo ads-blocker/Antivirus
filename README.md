@@ -1,12 +1,13 @@
 # Enterprise EDR Antivirus System
 
-A production-ready, enterprise-grade Endpoint Detection and Response (EDR) system with 31 specialized detection and monitoring modules.
+A production-ready, enterprise-grade Endpoint Detection and Response (EDR) system with 42 specialized detection and monitoring modules.
 
 ## Features
 
 - **Hot-Swap Module Support**: Modules can be updated without stopping the orchestrator
 - **Managed Tick Jobs**: Low RAM usage through efficient timed execution
 - **Module Health Monitoring**: Automatic detection and restart of failed modules
+- **Automatic Response Engine**: Centralized threat response system that automatically quarantines, kills processes, blocks network connections, and alerts based on threat severity
 - **Comprehensive Logging**: All detections logged to Event Log and file system
 - **Enterprise-Ready**: Production-grade error handling and resource management
 
@@ -19,12 +20,22 @@ A production-ready, enterprise-grade Endpoint Detection and Response (EDR) syste
 - Performs hot-swap module updates
 - Provides centralized logging and event reporting
 
-### Detection Modules (31 Total)
+### Response Engine (`ResponseEngine.ps1`)
+- **Automatic Threat Response**: Processes all detections from all modules
+- **Severity-Based Actions**:
+  - **Critical**: Quarantine files, Kill processes, Block network connections, Log, Alert
+  - **High**: Quarantine files, Log, Alert
+  - **Medium**: Log, Alert
+  - **Low**: Log only
+- **Real-Time Processing**: Monitors detection logs and Event Log continuously
+- **Action Tracking**: Logs all response actions for audit purposes
+
+### Detection Modules (42 Total)
 
 1. **HashDetection** - Malware hash-based detection
 2. **LOLBinDetection** - Living-Off-The-Land binary detection
 3. **ProcessAnomalyDetection** - Unusual process behavior detection
-4. **AMSIBypassDetection** - AMSI bypass attempt detection
+4. **AMSIBypassDetection** - Enhanced AMSI bypass attempt detection (includes obfuscated bypass detection)
 5. **CredentialDumpDetection** - Credential dumping tool detection
 6. **WMIPersistenceDetection** - WMI-based persistence detection
 7. **ScheduledTaskDetection** - Malicious scheduled task detection
@@ -52,6 +63,17 @@ A production-ready, enterprise-grade Endpoint Detection and Response (EDR) syste
 29. **DNSExfiltrationDetection** - DNS-based data exfiltration detection
 30. **PasswordManagement** - Password policy and storage monitoring
 31. **WebcamGuardian** - Webcam access monitoring and protection
+32. **ElfCatcher** - Browser DLL injection monitoring (detects suspicious DLLs like _elf.dll patterns)
+33. **FileEntropyDetection** - Packed/encrypted file detection via entropy analysis
+34. **QuarantineManagement** - File quarantine operations and tracking
+35. **ProcessCreationDetection** - Process creation anomaly detection
+36. **ReflectiveDLLInjectionDetection** - Reflective DLL injection and memory-only DLL detection
+37. **ResponseEngine** - Centralized automatic threat response system
+38. **BeaconDetection** - C2 beaconing and command & control communication detection
+39. **CodeInjectionDetection** - Various code injection technique detection
+40. **LateralMovementDetection** - Lateral movement techniques (SMB, RDP, WMI, PsExec)
+41. **DataExfiltrationDetection** - Comprehensive data exfiltration detection
+42. **HoneypotModule** - Decoy file creation and monitoring for threat detection
 
 ## Installation
 
@@ -110,7 +132,8 @@ A production-ready, enterprise-grade Endpoint Detection and Response (EDR) syste
 ### Event Log
 - Source: `AntivirusEDR`
 - Log: `Application`
-- Event IDs: 2001-2031 (module-specific)
+- Event IDs: 2001-2041 (module-specific), 2100+ (ResponseEngine actions)
+- Response Actions: Event ID 2100+ for automatic response actions
 
 ### File Logs
 - Location: `%ProgramData%\Antivirus\Logs\`
@@ -151,10 +174,29 @@ Module configuration is passed via `$ModuleConfig` hashtable:
 ## Security
 
 - All detections are logged with timestamps
+- **Automatic Response**: Critical/High threats are automatically quarantined, processes killed, and network connections blocked
 - Event Log integration for SIEM compatibility
 - Detailed file-based logging for forensic analysis
 - Error handling prevents system crashes
 - Module isolation prevents cross-module interference
+- **Honeypot Files**: Decoy files detect unauthorized access attempts
+- **Quarantine System**: Infected files are automatically moved to quarantine with hash tracking
+
+## Response Actions
+
+The ResponseEngine automatically takes actions based on threat severity:
+
+| Severity | Actions |
+|----------|---------|
+| **Critical** | Quarantine file, Kill process, Block network, Log, Alert |
+| **High** | Quarantine file, Log, Alert |
+| **Medium** | Log, Alert |
+| **Low** | Log only |
+
+Response actions are logged to:
+- Event Log (Event ID 2100+)
+- `ResponseEngine_YYYY-MM-DD.log`
+- Module-specific detection logs
 
 ## Troubleshooting
 
@@ -172,6 +214,12 @@ Module configuration is passed via `$ModuleConfig` hashtable:
 - Verify modules are running: Check orchestrator output
 - Review module logs in `%ProgramData%\Antivirus\Logs\`
 - Ensure modules have necessary permissions
+
+### Response Engine Not Acting
+- Check `ResponseEngine_YYYY-MM-DD.log` for processing status
+- Verify threat severity levels are set correctly
+- Check Event Log for ResponseEngine events (2100+)
+- Ensure quarantine directory has write permissions
 
 ## License
 
