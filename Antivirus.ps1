@@ -1,0 +1,511 @@
+#Requires -Version 5.1
+# Enterprise EDR Antivirus Orchestrator
+# Production-Ready with Hot-Swap Module Support
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$false)]
+    [int]$TickInterval = 30,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ModulesPath = "$PSScriptRoot\modules",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$ProgramDataPath = "$env:ProgramData\Antivirus\Modules",
+    
+    [Parameter(Mandatory=$false)]
+    [string]$LogPath = "$env:ProgramData\Antivirus\Logs",
+    
+    [Parameter(Mandatory=$false)]
+    [switch]$RunAsService
+)
+
+#region Global Variables
+$Script:ModuleJobs = @{}
+$Script:ModuleHealth = @{}
+$Script:ModuleLastError = @{}
+$Script:ModuleStats = @{}
+$Script:IsRunning = $true
+$Script:LockObject = New-Object System.Object
+$Script:Configuration = @{
+    TickInterval = $TickInterval
+    MaxConcurrentModules = 10
+    ModuleTimeout = 300
+    HealthCheckInterval = 60
+    ErrorThreshold = 3
+    EnableDetailedLogging = $true
+}
+#endregion
+
+#region Logging Functions
+function Write-Log {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$Message,
+        [ValidateSet('Info','Warning','Error','Debug')]
+        [string]$Level = 'Info',
+        [string]$ModuleName = 'Orchestrator'
+    )
+    
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+    $logEntry = "[$timestamp] [$Level] [$ModuleName] $Message"
+    
+    if (-not (Test-Path $LogPath)) {
+        New-Item -Path $LogPath -ItemType Directory -Force | Out-Null
+    }
+    
+    $logFile = Join-Path $LogPath "Antivirus_$(Get-Date -Format 'yyyy-MM-dd').log"
+    
+    try {
+        Add-Content -Path $logFile -Value $logEntry -ErrorAction SilentlyContinue
+        if ($Level -eq 'Error' -or $Configuration.EnableDetailedLogging) {
+            Write-Host $logEntry -ForegroundColor $(switch($Level){
+                'Error'{'Red'}
+                'Warning'{'Yellow'}
+                'Debug'{'Gray'}
+                default{'White'}
+            })
+        }
+    } catch {
+        Write-Host "Failed to write log: $_" -ForegroundColor Red
+    }
+}
+
+function Write-EventLog {
+    param(
+        [string]$Message,
+        [ValidateSet('Information','Warning','Error')]
+        [string]$EntryType = 'Information'
+    )
+    
+    try {
+        $source = "AntivirusEDR"
+        if (-not [System.Diagnostics.EventLog]::SourceExists($source)) {
+            New-EventLog -LogName Application -Source $source -ErrorAction SilentlyContinue
+        }
+        Write-EventLog -LogName Application -Source $source -EntryType $EntryType -EventId 1000 -Message $Message
+    } catch {
+        # Event log may not be available, continue silently
+    }
+}
+#endregion
+
+#region Module Management
+function Copy-ModulesToProgramData {
+    param(
+        [string]$SourcePath,
+        [string]$DestinationPath
+    )
+    
+    Write-Log "Starting module deployment from $SourcePath to $DestinationPath" -Level Info
+    
+    if (-not (Test-Path $SourcePath)) {
+        Write-Log "Source path does not exist: $SourcePath" -Level Error
+        return $false
+    }
+    
+    try {
+        if (-not (Test-Path $DestinationPath)) {
+            New-Item -Path $DestinationPath -ItemType Directory -Force | Out-Null
+            Write-Log "Created destination directory: $DestinationPath" -Level Info
+        }
+        
+        $modules = Get-ChildItem -Path $SourcePath -Filter "*.ps1" -File
+        
+        if ($modules.Count -eq 0) {
+            Write-Log "No PS1 modules found in source path" -Level Warning
+            return $false
+        }
+        
+        $copiedCount = 0
+        foreach ($module in $modules) {
+            try {
+                $destPath = Join-Path $DestinationPath $module.Name
+                Copy-Item -Path $module.FullName -Destination $destPath -Force
+                $copiedCount++
+                Write-Log "Copied module: $($module.Name)" -Level Debug
+            } catch {
+                Write-Log "Failed to copy $($module.Name): $_" -Level Error
+            }
+        }
+        
+        Write-Log "Deployed $copiedCount modules to ProgramData" -Level Info
+        return $true
+    } catch {
+        Write-Log "Module deployment failed: $_" -Level Error
+        return $false
+    }
+}
+
+function Get-AvailableModules {
+    param([string]$ModulePath)
+    
+    $modules = @()
+    if (Test-Path $ModulePath) {
+        $moduleFiles = Get-ChildItem -Path $ModulePath -Filter "*.ps1" -File
+        
+        foreach ($module in $moduleFiles) {
+            try {
+                $content = Get-Content $module.FullName -Raw -ErrorAction Stop
+                if ($content -match 'function\s+Start-Module\s*\(' -or 
+                    $content -match 'function\s+Invoke-Module\s*\(' -or
+                    $content -match '\$ModuleConfig') {
+                    $modules += @{
+                        Name = $module.BaseName
+                        Path = $module.FullName
+                        LastModified = $module.LastWriteTime
+                    }
+                }
+            } catch {
+                Write-Log "Error analyzing module $($module.Name): $_" -Level Warning
+            }
+        }
+    }
+    
+    return $modules
+}
+
+function Start-ModuleJob {
+    param(
+        [hashtable]$ModuleInfo,
+        [hashtable]$Config
+    )
+    
+    $moduleName = $ModuleInfo.Name
+    $modulePath = $ModuleInfo.Path
+    
+    try {
+        # Check if module is already running
+        if ($Script:ModuleJobs.ContainsKey($moduleName)) {
+            $existingJob = $Script:ModuleJobs[$moduleName]
+            if ($existingJob.State -eq 'Running') {
+                Write-Log "Module $moduleName is already running" -Level Warning
+                return $false
+            }
+        }
+        
+        # Create module scriptblock with error handling
+        $scriptBlock = {
+            param($ModulePath, $ModuleName, $Config)
+            
+            $ErrorActionPreference = 'Continue'
+            $Error.Clear()
+            
+            try {
+                # Import and execute module
+                . $ModulePath
+                
+                # Try to invoke Start-Module if it exists
+                if (Get-Command -Name 'Start-Module' -ErrorAction SilentlyContinue) {
+                    Start-Module -Config $Config
+                }
+                # Try Invoke-Module as alternative
+                elseif (Get-Command -Name 'Invoke-Module' -ErrorAction SilentlyContinue) {
+                    Invoke-Module -Config $Config
+                }
+                # Execute main logic if module config exists
+                elseif (Test-Path variable:ModuleConfig) {
+                    $ModuleConfig = $Config
+                    . $ModulePath
+                }
+                # Fallback: execute module file
+                else {
+                    . $ModulePath
+                }
+            } catch {
+                Write-Output "MODULE_ERROR:$ModuleName`:$_"
+            }
+        }
+        
+        # Create job with timeout
+        $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList $modulePath, $moduleName, $Config
+        
+        [System.Threading.Monitor]::Enter($Script:LockObject)
+        try {
+            $Script:ModuleJobs[$moduleName] = $job
+            $Script:ModuleHealth[$moduleName] = @{
+                Status = 'Running'
+                StartTime = Get-Date
+                LastCheck = Get-Date
+                ErrorCount = 0
+                TickCount = 0
+            }
+            $Script:ModuleStats[$moduleName] = @{
+                Detections = 0
+                Errors = 0
+                LastDetection = $null
+            }
+        } finally {
+            [System.Threading.Monitor]::Exit($Script:LockObject)
+        }
+        
+        Write-Log "Started module job: $moduleName (Job ID: $($job.Id))" -Level Info
+        Write-EventLog "Module $moduleName started successfully" -EntryType Information
+        
+        return $true
+    } catch {
+        Write-Log "Failed to start module $moduleName`: $_" -Level Error
+        Write-EventLog "Failed to start module $moduleName`: $_" -EntryType Error
+        return $false
+    }
+}
+
+function Stop-ModuleJob {
+    param([string]$ModuleName)
+    
+    try {
+        if ($Script:ModuleJobs.ContainsKey($ModuleName)) {
+            $job = $Script:ModuleJobs[$ModuleName]
+            Stop-Job -Job $job -ErrorAction SilentlyContinue
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            
+            [System.Threading.Monitor]::Enter($Script:LockObject)
+            try {
+                $Script:ModuleJobs.Remove($ModuleName)
+                if ($Script:ModuleHealth.ContainsKey($ModuleName)) {
+                    $Script:ModuleHealth[$ModuleName].Status = 'Stopped'
+                }
+            } finally {
+                [System.Threading.Monitor]::Exit($Script:LockObject)
+            }
+            
+            Write-Log "Stopped module: $moduleName" -Level Info
+            return $true
+        }
+        return $false
+    } catch {
+        Write-Log "Error stopping module $moduleName`: $_" -Level Error
+        return $false
+    }
+}
+
+function Update-ModuleHealth {
+    param([string]$ModuleName)
+    
+    if (-not $Script:ModuleHealth.ContainsKey($ModuleName)) {
+        return
+    }
+    
+    $health = $Script:ModuleHealth[$ModuleName]
+    $job = $Script:ModuleJobs[$ModuleName]
+    
+    try {
+        $health.LastCheck = Get-Date
+        
+        if ($null -eq $job) {
+            $health.Status = 'NotRunning'
+            $health.ErrorCount++
+            return
+        }
+        
+        # Check job state
+        if ($job.State -eq 'Failed' -or $job.State -eq 'Stopped') {
+            $health.Status = $job.State
+            $health.ErrorCount++
+            
+            # Collect error output
+            $output = Receive-Job -Job $job
+            if ($output -match 'MODULE_ERROR:(.+?):(.+)') {
+                $Script:ModuleLastError[$ModuleName] = $matches[2]
+                Write-Log "Module $ModuleName error: $($matches[2])" -Level Error -ModuleName $ModuleName
+            }
+            
+            # Restart if error count is below threshold
+            if ($health.ErrorCount -lt $Script:Configuration.ErrorThreshold) {
+                Write-Log "Restarting module $ModuleName (error count: $($health.ErrorCount))" -Level Warning
+                Stop-ModuleJob -ModuleName $ModuleName
+                Start-Sleep -Seconds 5
+                $moduleInfo = Get-AvailableModules -ModulePath $Script:ProgramDataPath | Where-Object { $_.Name -eq $ModuleName } | Select-Object -First 1
+                if ($moduleInfo) {
+                    Start-ModuleJob -ModuleInfo $moduleInfo -Config $Script:Configuration
+                }
+            } else {
+                Write-Log "Module $ModuleName exceeded error threshold, disabling" -Level Error
+                Write-EventLog "Module $ModuleName disabled due to repeated failures" -EntryType Error
+            }
+        } elseif ($job.State -eq 'Running') {
+            $health.Status = 'Running'
+            
+            # Check for timeout
+            $runtime = (Get-Date) - $health.StartTime
+            if ($runtime.TotalSeconds -gt $Script:Configuration.ModuleTimeout) {
+                Write-Log "Module $ModuleName timed out, restarting" -Level Warning
+                Stop-ModuleJob -ModuleName $ModuleName
+                $moduleInfo = Get-AvailableModules -ModulePath $Script:ProgramDataPath | Where-Object { $_.Name -eq $ModuleName } | Select-Object -First 1
+                if ($moduleInfo) {
+                    Start-ModuleJob -ModuleInfo $moduleInfo -Config $Script:Configuration
+                }
+            }
+        }
+        
+        # Increment tick count for running modules
+        if ($health.Status -eq 'Running') {
+            $health.TickCount++
+        }
+        
+    } catch {
+        Write-Log "Error updating health for $ModuleName`: $_" -Level Error
+    }
+}
+
+function Invoke-HotSwapModules {
+    Write-Log "Performing hot-swap module check" -Level Debug
+    
+    try {
+        $sourceModules = Get-AvailableModules -ModulePath $Script:ModulesPath
+        $deployedModules = Get-AvailableModules -ModulePath $Script:ProgramDataPath
+        
+        # Check for new or updated modules
+        foreach ($sourceModule in $sourceModules) {
+            $deployed = $deployedModules | Where-Object { $_.Name -eq $sourceModule.Name } | Select-Object -First 1
+            
+            if ($null -eq $deployed -or $sourceModule.LastModified -gt $deployed.LastModified) {
+                Write-Log "Hot-swapping module: $($sourceModule.Name)" -Level Info
+                
+                # Stop existing instance
+                if ($Script:ModuleJobs.ContainsKey($sourceModule.Name)) {
+                    Stop-ModuleJob -ModuleName $sourceModule.Name
+                    Start-Sleep -Seconds 2
+                }
+                
+                # Copy new version
+                Copy-Item -Path $sourceModule.Path -Destination (Join-Path $Script:ProgramDataPath "$($sourceModule.Name).ps1") -Force
+                Start-Sleep -Seconds 1
+                
+                # Restart module
+                $newModule = @{
+                    Name = $sourceModule.Name
+                    Path = Join-Path $Script:ProgramDataPath "$($sourceModule.Name).ps1"
+                }
+                Start-ModuleJob -ModuleInfo $newModule -Config $Script:Configuration
+            }
+        }
+        
+        # Check for removed modules
+        $deployedNames = $deployedModules | ForEach-Object { $_.Name }
+        foreach ($runningModule in $Script:ModuleJobs.Keys) {
+            if ($runningModule -notin $deployedNames) {
+                Write-Log "Module $runningModule removed from source, stopping" -Level Warning
+                Stop-ModuleJob -ModuleName $runningModule
+            }
+        }
+        
+    } catch {
+        Write-Log "Hot-swap check failed: $_" -Level Error
+    }
+}
+#endregion
+
+#region Main Execution
+function Start-AntivirusOrchestrator {
+    Write-Log "=== Antivirus EDR Orchestrator Starting ===" -Level Info
+    Write-EventLog "Antivirus EDR Orchestrator starting" -EntryType Information
+    
+    # Initialize directories
+    if (-not (Test-Path $ProgramDataPath)) {
+        New-Item -Path $ProgramDataPath -ItemType Directory -Force | Out-Null
+    }
+    if (-not (Test-Path $LogPath)) {
+        New-Item -Path $LogPath -ItemType Directory -Force | Out-Null
+    }
+    
+    # Deploy initial modules
+    if (-not (Copy-ModulesToProgramData -SourcePath $ModulesPath -DestinationPath $ProgramDataPath)) {
+        Write-Log "Initial module deployment failed, continuing with existing modules" -Level Warning
+    }
+    
+    # Start all available modules
+    $modules = Get-AvailableModules -ModulePath $ProgramDataPath
+    Write-Log "Found $($modules.Count) modules to start" -Level Info
+    
+    $startedCount = 0
+    foreach ($module in $modules) {
+        if ($startedCount -lt $Script:Configuration.MaxConcurrentModules) {
+            if (Start-ModuleJob -ModuleInfo $module -Config $Script:Configuration) {
+                $startedCount++
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    
+    Write-Log "Started $startedCount modules" -Level Info
+    
+    # Main monitoring loop
+    $lastHealthCheck = Get-Date
+    $lastHotSwap = Get-Date
+    
+    while ($Script:IsRunning) {
+        try {
+            $now = Get-Date
+            
+            # Health check interval
+            if (($now - $lastHealthCheck).TotalSeconds -ge $Script:Configuration.HealthCheckInterval) {
+                foreach ($moduleName in $Script:ModuleJobs.Keys.Clone()) {
+                    Update-ModuleHealth -ModuleName $moduleName
+                }
+                $lastHealthCheck = $now
+                
+                # Log summary
+                $runningCount = ($Script:ModuleHealth.Values | Where-Object { $_.Status -eq 'Running' }).Count
+                Write-Log "Health check complete: $runningCount/$($Script:ModuleJobs.Count) modules running" -Level Debug
+            }
+            
+            # Hot-swap check interval (every 5 minutes)
+            if (($now - $lastHotSwap).TotalSeconds -ge 300) {
+                Invoke-HotSwapModules
+                $lastHotSwap = $now
+            }
+            
+            # Cleanup completed jobs
+            $completedJobs = $Script:ModuleJobs.GetEnumerator() | Where-Object { $_.Value.State -in @('Completed','Failed','Stopped') }
+            foreach ($completed in $completedJobs) {
+                Remove-Job -Job $completed.Value -Force -ErrorAction SilentlyContinue
+            }
+            
+            Start-Sleep -Seconds $TickInterval
+            
+        } catch {
+            Write-Log "Orchestrator loop error: $_" -Level Error
+            Start-Sleep -Seconds 5
+        }
+    }
+}
+
+function Stop-AntivirusOrchestrator {
+    Write-Log "=== Antivirus EDR Orchestrator Stopping ===" -Level Info
+    $Script:IsRunning = $false
+    
+    # Stop all module jobs
+    foreach ($moduleName in $Script:ModuleJobs.Keys.Clone()) {
+        Stop-ModuleJob -ModuleName $moduleName
+    }
+    
+    Write-EventLog "Antivirus EDR Orchestrator stopped" -EntryType Information
+}
+
+# Handle termination
+Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
+    Stop-AntivirusOrchestrator
+}
+
+# Trap Ctrl+C
+[Console]::TreatControlCAsInput = $false
+trap {
+    Stop-AntivirusOrchestrator
+    break
+}
+
+# Start orchestrator
+if ($RunAsService) {
+    Start-AntivirusOrchestrator
+} else {
+    Write-Host "Antivirus EDR Orchestrator" -ForegroundColor Cyan
+    Write-Host "Modules Path: $ModulesPath" -ForegroundColor Gray
+    Write-Host "ProgramData Path: $ProgramDataPath" -ForegroundColor Gray
+    Write-Host "Log Path: $LogPath" -ForegroundColor Gray
+    Write-Host "Press Ctrl+C to stop" -ForegroundColor Yellow
+    Write-Host ""
+    
+    Start-AntivirusOrchestrator
+}
+#endregion
