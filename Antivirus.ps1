@@ -260,8 +260,8 @@ function Start-ModuleJob {
             }
         }
         
-        # Create job with timeout
-        $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList $modulePath, $moduleName, $Config
+        # Create job with timeout and better resource management
+        $job = Start-Job -ScriptBlock $scriptBlock -ArgumentList $modulePath, $moduleName, $Config -Name "AV_$moduleName"
         
         [System.Threading.Monitor]::Enter($Script:LockObject)
         try {
@@ -643,6 +643,26 @@ function Start-AntivirusOrchestrator {
     Write-Log "=== Antivirus EDR Orchestrator Starting ===" -Level Info
     Write-EventLog "Antivirus EDR Orchestrator starting" -EntryType Information
     
+    # Cleanup orphaned processes on startup
+    Write-Log "Performing startup cleanup of orphaned processes" -Level Info
+    try {
+        $currentPID = $PID
+        $orphanedProcesses = Get-Process -Name "powershell" -ErrorAction SilentlyContinue |
+            Where-Object { $_.Id -ne $currentPID }
+        
+        foreach ($proc in $orphanedProcesses) {
+            try {
+                $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
+                if ($cmdLine -and ($cmdLine -match "Antivirus|AV_|Start-Module")) {
+                    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                    Write-Log "Startup cleanup: Removed orphaned PowerShell PID: $($proc.Id)" -Level Info
+                }
+            } catch { }
+        }
+    } catch {
+        Write-Log "Startup cleanup failed: $_" -Level Warning
+    }
+    
     # Initialize directories
     if (-not (Test-Path $ProgramDataPath)) {
         New-Item -Path $ProgramDataPath -ItemType Directory -Force | Out-Null
@@ -706,11 +726,47 @@ function Start-AntivirusOrchestrator {
                 $lastHotSwap = $now
             }
             
-            # Cleanup completed jobs
+            # Enhanced cleanup of completed jobs and orphaned PowerShell processes
             $completedJobs = $Script:ModuleJobs.GetEnumerator() | Where-Object { $_.Value.State -in @('Completed','Failed','Stopped') }
             foreach ($completed in $completedJobs) {
-                Remove-Job -Job $completed.Value -Force -ErrorAction SilentlyContinue
+                try {
+                    Remove-Job -Job $completed.Value -Force -ErrorAction SilentlyContinue
+                    $Script:ModuleJobs.Remove($completed.Key) | Out-Null
+                    Write-Log "Removed completed job: $($completed.Key)" -Level Debug
+                } catch { }
             }
+            
+            # Aggressive cleanup of orphaned PowerShell processes
+            try {
+                $currentPID = $PID
+                $antivirusProcesses = Get-Process -Name "powershell" -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.Id -ne $currentPID }
+                
+                foreach ($proc in $antivirusProcesses) {
+                    try {
+                        # Check if this is an orphaned antivirus process
+                        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
+                        if ($cmdLine -and ($cmdLine -match "Antivirus|AV_" -or $cmdLine -match "Start-Module")) {
+                            # Check if process has been running too long (> 10 minutes)
+                            if ($proc.StartTime -lt (Get-Date).AddMinutes(-10)) {
+                                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                                Write-Log "Cleaned up long-running PowerShell process PID: $($proc.Id)" -Level Debug
+                            }
+                        }
+                    } catch { }
+                }
+                
+                # Also clean up any PowerShell processes using excessive memory (> 100MB)
+                $heavyProcesses = Get-Process -Name "powershell" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Id -ne $currentPID -and $_.WorkingSet64 -gt 100MB }
+                
+                foreach ($proc in $heavyProcesses) {
+                    try {
+                        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                        Write-Log "Cleaned up high-memory PowerShell process PID: $($proc.Id) ($([math]::Round($proc.WorkingSet64/1MB,1))MB)" -Level Debug
+                    } catch { }
+                }
+            } catch { }
             
             Start-Sleep -Seconds $TickInterval
             
