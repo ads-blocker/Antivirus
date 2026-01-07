@@ -67,7 +67,7 @@ if (Test-Path $targetScript -ErrorAction SilentlyContinue) {
 
 $Script:Configuration = @{
     TickInterval = $TickInterval
-    MaxConcurrentModules = 10
+    MaxConcurrentModules = 50
     ModuleTimeout = 300
     HealthCheckInterval = 60
     ErrorThreshold = 3
