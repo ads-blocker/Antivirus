@@ -28,6 +28,26 @@ param(
 
 #region === CONFIGURATION ===
 
+# Installation paths
+$Script:InstallPath = "$env:ProgramData\Antivirus"
+$Script:ScriptName = Split-Path -Leaf $PSCommandPath
+$Script:StabilityLogPath = "$Script:InstallPath\Logs\stability_log.txt"
+$Script:SelfPath = $PSCommandPath
+$Script:MaxRestartAttempts = 3
+$Script:MaxTerminationAttempts = 5
+$Script:TerminationAttempts = 0
+$Script:AutoRestart = $true
+$script:ExitCleanupRegistered = $false
+
+# Global state
+$Global:AntivirusState = @{
+    Running = $false
+    Installed = $false
+    Jobs = @{}
+    Mutex = $null
+    ThreatCount = 0
+}
+
 $script:EDRConfig = @{
     Version = "1.0.0"
     StartTime = Get-Date
@@ -35,6 +55,16 @@ $script:EDRConfig = @{
     DataPath = "$env:ProgramData\Antivirus\Data"
     QuarantinePath = "$env:ProgramData\Antivirus\Quarantine"
     EventLogSource = "AntivirusEDR"
+}
+
+# Config for compatibility with existing functions
+$Config = @{
+    EDRName = "AntivirusEDR"
+    LogPath = "$env:ProgramData\Antivirus\Logs"
+    QuarantinePath = "$env:ProgramData\Antivirus\Quarantine"
+    DatabasePath = "$env:ProgramData\Antivirus\Data"
+    PIDFilePath = "$env:ProgramData\Antivirus\Data\antivirus.pid"
+    MutexName = "Local\AntivirusEDR_Mutex_{0}_{1}" -f $env:COMPUTERNAME, $env:USERNAME
 }
 
 # Module definitions with tick intervals (in seconds)
@@ -166,6 +196,57 @@ function Write-ModuleStats {
 
 #endregion
 
+#region === LOGGING HELPER FUNCTIONS ===
+
+function Write-StabilityLog {
+    param(
+        [string]$Message, 
+        [string]$Level = "INFO"
+    )
+    
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $entry = "[$ts] [$Level] [STABILITY] $Message"
+    
+    if (!(Test-Path (Split-Path $Script:StabilityLogPath -Parent))) {
+        New-Item -ItemType Directory -Path (Split-Path $Script:StabilityLogPath -Parent) -Force | Out-Null
+    }
+    
+    Add-Content -Path $Script:StabilityLogPath -Value $entry -ErrorAction SilentlyContinue
+    Write-Host $entry -ForegroundColor $(switch($Level) { "ERROR" {"Red"} "WARN" {"Yellow"} default {"White"} })
+}
+
+function Write-AVLog {
+    param(
+        [string]$Message, 
+        [string]$Level = "INFO"
+    )
+    
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $entry = "[$ts] [$Level] $Message"
+    $logFile = Join-Path $Config.LogPath "antivirus_log.txt"
+    
+    if (!(Test-Path $Config.LogPath)) {
+        New-Item -ItemType Directory -Path $Config.LogPath -Force | Out-Null
+    }
+    
+    Add-Content -Path $logFile -Value $entry -ErrorAction SilentlyContinue
+    
+    $eid = switch ($Level) {
+        "ERROR" { 1001 }
+        "WARN" { 1002 }
+        "THREAT" { 1003 }
+        default { 1000 }
+    }
+    
+    try {
+        Write-EventLog -LogName Application -Source $Config.EDRName -EntryType Information -EventId $eid -Message $Message -ErrorAction SilentlyContinue
+    } catch {
+        # Event log source may not exist, ignore
+    }
+}
+
+#endregion
+
 #region === INITIALIZATION MODULE ===
 
 function Invoke-Initialization {
@@ -228,6 +309,55 @@ function Invoke-Initialization {
     } catch {
         Write-EDRLog -Module "Initializer" -Message "Initialization failed: $_" -Level "Error"
         return 0
+    }
+}
+
+#endregion
+
+#region === UTILITY FUNCTIONS ===
+
+function Reset-InternetProxySettings {
+    try {
+        Get-Job -Name "YouTubeAdBlockerProxy" -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
+    }
+    catch {}
+
+    try {
+        $pacFile = "$env:TEMP\youtube-adblocker.pac"
+        if (Test-Path $pacFile) {
+            Remove-Item -Path $pacFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {}
+
+    try {
+        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+        if (Test-Path $regPath) {
+            Remove-ItemProperty -Path $regPath -Name AutoConfigURL -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $regPath -Name ProxyEnable -Value 0 -ErrorAction SilentlyContinue
+        }
+    }
+    catch {}
+}
+
+#endregion
+
+#region === EXIT CLEANUP ===
+
+function Register-ExitCleanup {
+    if ($script:ExitCleanupRegistered) {
+        return
+    }
+
+    try {
+        Register-EngineEvent -SourceIdentifier "AntivirusProtection_ExitCleanup" -EventName PowerShell.Exiting -Action {
+            try { Reset-InternetProxySettings } catch {}
+        } | Out-Null
+        $script:ExitCleanupRegistered = $true
+        Write-EDRLog -Module "Main" -Message "Exit cleanup handler registered" -Level "Debug"
+    }
+    catch {
+        Write-EDRLog -Module "Main" -Message "Failed to register exit cleanup: $_" -Level "Warning"
     }
 }
 
@@ -3166,30 +3296,99 @@ function Start-TickManager {
 
 #region === MAIN ENTRY POINT ===
 
-# Check if uninstall was requested
-if ($Uninstall) {
+try {
+    # Check if uninstall was requested
+    if ($Uninstall) {
+        try {
+            Uninstall-Antivirus
+            exit 0
+        } catch {
+            Write-Host "[!] Uninstall failed: $_" -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    Write-Host "`nAntivirus Protection (Single File)`n" -ForegroundColor Cyan
+    Write-StabilityLog "=== Antivirus Starting ==="
+    Write-StabilityLog "Executing script path: $PSCommandPath" "INFO"
+
+    # Register exit cleanup handler first
+    Register-ExitCleanup
+
+    # Install (copies script to install location and sets up persistence)
+    Install-Antivirus
+    
+    # Update SelfPath to point to install location after installation
+    if ($Global:AntivirusState.Installed) {
+        $Script:SelfPath = Join-Path $Script:InstallPath $Script:ScriptName
+    }
+
+    # Initialize mutex (prevents multiple instances)
+    Initialize-Mutex
+
+    # Register termination protection
+    Register-TerminationProtection
+
+    # Optional: Connection monitoring (can be enabled if needed)
+    # Start-ConnectionMonitoring
+
+    # Optional: Remove unsigned DLLs (can be enabled if needed)  
+    # Remove-UnsignedDLLs
+
+    Write-Host "`n[PROTECTION] Initializing anti-termination safeguards..." -ForegroundColor Cyan
+
+    # Enable Ctrl+C protection
+    if ($host.Name -eq "Windows PowerShell ISE Host") {
+        Write-Host "[PROTECTION] ISE detected - using trap-based Ctrl+C protection" -ForegroundColor Cyan
+        Write-Host "[PROTECTION] Ctrl+C protection enabled (requires $Script:MaxTerminationAttempts attempts to stop)" -ForegroundColor Green
+    } else {
+        Enable-CtrlCProtection
+    }
+
+    # Enable auto-restart if running as admin
     try {
-        Uninstall-Antivirus
-        exit 0
+        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($isAdmin) {
+            Enable-AutoRestart
+            Start-ProcessWatchdog
+        } else {
+            Write-Host "[INFO] Auto-restart requires administrator privileges (optional)" -ForegroundColor Gray
+        }
     } catch {
-        Write-Host "[!] Uninstall failed: $_" -ForegroundColor Red
+        Write-Host "[WARNING] Some protection features failed to initialize: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+
+    Write-Host "[PROTECTION] Anti-termination safeguards active" -ForegroundColor Green
+
+    # Run initialization
+    Write-Host "`n[*] Starting Antivirus EDR initialization..." -ForegroundColor Cyan
+    $initResult = Invoke-Initialization
+
+    if ($initResult -gt 0) {
+        Write-Host "[+] Initialization successful" -ForegroundColor Green
+        Write-EDRLog -Module "Main" -Message "Initialization successful, starting tick manager" -Level "Info"
+        Start-TickManager
+    } else {
+        Write-Host "[!] Initialization failed - cannot start" -ForegroundColor Red
+        Write-EDRLog -Module "Main" -Message "Initialization failed, cannot start" -Level "Error"
+        Write-Host "`nPress any key to exit..."
+        $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
         exit 1
     }
 }
+catch {
+    $err = $_.Exception.Message
+    Write-Host "`n[!] Critical error: $err`n" -ForegroundColor Red
+    Write-StabilityLog "Critical startup error: $err" "ERROR"
+    Write-AVLog "Startup error: $err" "ERROR"
 
-# Run initialization first
-Write-Host "[*] Starting Antivirus EDR initialization..." -ForegroundColor Cyan
-$initResult = Invoke-Initialization
+    if ($err -like "*already running*") {
+        Write-Host "[i] Another instance is running. Exiting.`n" -ForegroundColor Yellow
+        Write-StabilityLog "Blocked duplicate instance - exiting" "INFO"
+        exit 1
+    }
 
-if ($initResult -gt 0) {
-    Write-Host "[+] Initialization successful" -ForegroundColor Green
-    Write-EDRLog -Module "Main" -Message "Initialization successful, starting tick manager" -Level "Info"
-    Start-TickManager
-} else {
-    Write-Host "[!] Initialization failed - cannot start" -ForegroundColor Red
-    Write-EDRLog -Module "Main" -Message "Initialization failed, cannot start" -Level "Error"
-    Write-Host "`nPress any key to exit..."
-    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+    Write-StabilityLog "Exiting due to startup failure" "ERROR"
     exit 1
 }
 
