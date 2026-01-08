@@ -11,6 +11,7 @@
     Requires: Administrator privileges, PowerShell 5.1+
 #>
 
+[CmdletBinding()]
 param(
     [Parameter(Mandatory=$false)]
     [string[]]$AllowedDomains = @(),
@@ -21,7 +22,6 @@ param(
     [Parameter(Mandatory=$false)]
     [switch]$Uninstall = $false,
 
-    [switch]$Verbose,
     [int]$MainLoopInterval = 5,
     [string]$LogLevel = "Info"
 )
@@ -634,31 +634,33 @@ function Initialize-ServiceBaseline {
 }
 
 function Initialize-HashDatabase {
-    # Load known good hashes (whitelist)
-    $whitelistPath = "$env:ProgramData\Antivirus\HashDatabase\whitelist.txt"
-    if (Test-Path $whitelistPath) {
-        Get-Content $whitelistPath | ForEach-Object {
-            if ($_ -match '^([A-F0-9]{64})\|(.+)$') {
-                $script:HashDatabase[$matches[1]] = $matches[2]
-            }
-        }
-    }
-    
-    # Load threat hashes (blacklist)
-    $threatPaths = @(
-        "$env:ProgramData\Antivirus\HashDatabase\threats.txt",
-        "$env:ProgramData\Antivirus\HashDatabase\malware_hashes.txt"
-    )
-    
-    foreach ($threatPath in $threatPaths) {
-        if (Test-Path $threatPath) {
-            Get-Content $threatPath | ForEach-Object {
-                if ($_ -match '^([A-F0-9]{32,64})$') {
-                    $script:ThreatHashes[$matches[1].ToUpper()] = $true
+    try {
+        # Load known good hashes (whitelist)
+        $whitelistPath = "$env:ProgramData\Antivirus\HashDatabase\whitelist.txt"
+        if (Test-Path $whitelistPath) {
+            Get-Content $whitelistPath | ForEach-Object {
+                if ($_ -match '^([A-F0-9]{64})\|(.+)$') {
+                    $script:HashDatabase[$matches[1]] = $matches[2]
                 }
             }
         }
-    }
+        
+        # Load threat hashes (blacklist)
+        $threatPaths = @(
+            "$env:ProgramData\Antivirus\HashDatabase\threats.txt",
+            "$env:ProgramData\Antivirus\HashDatabase\malware_hashes.txt"
+        )
+        
+        foreach ($threatPath in $threatPaths) {
+            if (Test-Path $threatPath) {
+                Get-Content $threatPath | ForEach-Object {
+                    if ($_ -match '^([A-F0-9]{32,64})$') {
+                        $script:ThreatHashes[$matches[1].ToUpper()] = $true
+                    }
+                }
+            }
+        }
+    } catch { }
 }
 
 #endregion
@@ -3164,13 +3166,30 @@ function Start-TickManager {
 
 #region === MAIN ENTRY POINT ===
 
+# Check if uninstall was requested
+if ($Uninstall) {
+    try {
+        Uninstall-Antivirus
+        exit 0
+    } catch {
+        Write-Host "[!] Uninstall failed: $_" -ForegroundColor Red
+        exit 1
+    }
+}
+
 # Run initialization first
+Write-Host "[*] Starting Antivirus EDR initialization..." -ForegroundColor Cyan
 $initResult = Invoke-Initialization
+
 if ($initResult -gt 0) {
+    Write-Host "[+] Initialization successful" -ForegroundColor Green
     Write-EDRLog -Module "Main" -Message "Initialization successful, starting tick manager" -Level "Info"
     Start-TickManager
 } else {
+    Write-Host "[!] Initialization failed - cannot start" -ForegroundColor Red
     Write-EDRLog -Module "Main" -Message "Initialization failed, cannot start" -Level "Error"
+    Write-Host "`nPress any key to exit..."
+    $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
     exit 1
 }
 
