@@ -1731,25 +1731,45 @@ function Reset-ToBlank {
 }
 '@
         Set-Content -Path $script:PasswordScriptPath -Value $passwordFunctions -Force -ErrorAction SilentlyContinue
-        
-        # Register shutdown script if ResetOnShutdown is enabled
-        if ($ResetOnShutdown -and $IsAdmin) {
-            try {
+    }
+    
+    # Register shutdown script if ResetOnShutdown is enabled (register every time to ensure it persists after restart)
+    if ($ResetOnShutdown -and $IsAdmin) {
+        try {
+            # Check if handlers already exist to avoid excessive duplicates
+            $existingHandlers = Get-EventSubscriber -ErrorAction SilentlyContinue | 
+                Where-Object { $_.SourceIdentifier -eq "PowerShell.OnLogoff" -or $_.SourceIdentifier -eq "PowerShell.Exiting" }
+            
+            # Only register if we don't have both handlers already
+            if (-not $existingHandlers -or ($existingHandlers | Where-Object { $_.SourceIdentifier -eq "PowerShell.OnLogoff" }).Count -eq 0 -or ($existingHandlers | Where-Object { $_.SourceIdentifier -eq "PowerShell.Exiting" }).Count -eq 0) {
+                # Create a more reliable shutdown script that directly resets password
                 $shutdownScript = {
-                    $scriptPath = "$env:ProgramData\PasswordTasks.ps1"
-                    if (Test-Path $scriptPath) {
-                        . $scriptPath
-                        Reset-ToBlank
-                    }
+                    try {
+                        $scriptPath = "$env:ProgramData\PasswordTasks.ps1"
+                        $username = $env:USERNAME
+                        
+                        if (Test-Path $scriptPath) {
+                            . $scriptPath
+                            try {
+                                Reset-ToBlank -Username $username -ErrorAction Stop
+                            } catch {
+                                # Fallback: direct reset if function fails
+                                Set-LocalUser -Name $username -Password (ConvertTo-SecureString "" -AsPlainText -Force) -ErrorAction Stop
+                            }
+                        } else {
+                            # Fallback: direct reset if script file doesn't exist
+                            Set-LocalUser -Name $username -Password (ConvertTo-SecureString "" -AsPlainText -Force) -ErrorAction Stop
+                        }
+                    } catch { }
                 }
                 $shutdownJob = Register-EngineEvent -SourceIdentifier PowerShell.OnLogoff -Action $shutdownScript -SupportEvent -ErrorAction SilentlyContinue
                 $shutdownJob2 = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $shutdownScript -SupportEvent -ErrorAction SilentlyContinue
                 if ($shutdownJob -or $shutdownJob2) {
                     Write-Output "[Password] Shutdown event handlers registered - password will reset to blank on shutdown/restart"
                 }
-            } catch {
-                Write-Output "[Password] WARNING: Could not register shutdown handlers: $_"
             }
+        } catch {
+            Write-Output "[Password] WARNING: Could not register shutdown handlers: $_"
         }
     }
     
