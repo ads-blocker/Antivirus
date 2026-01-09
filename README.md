@@ -1,367 +1,271 @@
-# AlmostPerfect.ps1
+# Antivirus Protection - Modular EDR System
 
-**A Comprehensive Modular Antivirus & EDR Solution - Single File Build**
+A comprehensive, modular Antivirus and Endpoint Detection and Response (EDR) system written in PowerShell. This single-file solution provides enterprise-grade security monitoring and threat detection capabilities.
 
-A powerful, all-in-one security monitoring and protection script for Windows that combines antivirus capabilities, endpoint detection and response (EDR), and advanced security features in a single PowerShell script.
+## 📋 Overview
 
-## 🛡️ Overview
+This PowerShell-based antivirus and EDR system offers real-time threat detection, monitoring, and response capabilities. It includes multiple detection modules that run as managed background jobs, providing continuous protection against various types of malware and security threats.
 
-AlmostPerfect.ps1 is a modular security solution that provides real-time threat detection, monitoring, and response capabilities. It runs as a managed job system with 40+ detection modules, each operating at configurable intervals to provide comprehensive system protection.
+## ✨ Features
 
-**Author:** Gorstak  
-**Version:** 1.0  
-**Requires:** PowerShell 5.1+, Windows 10/11, Administrator privileges
+### Core Capabilities
+- **Modular Architecture**: 40+ independent detection modules
+- **Real-time Monitoring**: Continuous background monitoring with configurable intervals
+- **Auto-restart Protection**: Automatic restart on termination (requires admin privileges)
+- **Termination Protection**: Multiple safeguards against unauthorized termination
+- **Quarantine System**: Automatic threat isolation and management
+- **Logging & Reporting**: Comprehensive logging and threat reporting
 
-## ✨ Key Features
+### Detection Modules
 
-### Core Security Modules (40+ Detection Systems)
+#### Malware Detection
+- **Hash Detection**: SHA-256 hash-based malware identification with online lookup
+- **File Entropy Detection**: Detects suspicious file entropy patterns
+- **Unsigned DLL Scanner**: Identifies unsigned DLLs loaded into processes
 
-- **Hash-Based Detection** - Scans files against known malware hash databases
-- **LOLBin Detection** - Detects Living Off The Land binary abuse
-- **Process Anomaly Detection** - Identifies suspicious process behavior
-- **AMSI Bypass Detection** - Detects attempts to bypass Windows AMSI
-- **Credential Dump Detection** - Monitors for credential harvesting tools
-- **WMI Persistence Detection** - Detects WMI-based persistence mechanisms
-- **Scheduled Task Detection** - Monitors for suspicious scheduled tasks
-- **Registry Persistence Detection** - Detects registry-based persistence
-- **DLL Hijacking Detection** - Identifies DLL hijacking attempts
-- **Token Manipulation Detection** - Detects token manipulation attacks
-- **Process Hollowing Detection** - Identifies process hollowing techniques
-- **Keylogger Detection** - Detects keylogging software and hooks
-- **Ransomware Detection** - Early warning system for ransomware attacks
-- **Network Anomaly Detection** - Monitors for suspicious network activity
-- **Network Traffic Monitoring** - Analyzes network connections and traffic
-- **Rootkit Detection** - Scans for rootkit presence
-- **Clipboard Monitoring** - Monitors clipboard for sensitive data
-- **COM Monitoring** - Detects suspicious COM object registrations
-- **Browser Extension Monitoring** - Monitors browser extensions
-- **Shadow Copy Monitoring** - Detects shadow copy deletion (ransomware indicator)
-- **USB Monitoring** - Monitors USB device connections
-- **Event Log Monitoring** - Analyzes Windows event logs for threats
-- **Firewall Rule Monitoring** - Detects unauthorized firewall changes
-- **Service Monitoring** - Monitors Windows services for anomalies
-- **Fileless Detection** - Detects fileless malware techniques
-- **Memory Scanning** - Scans process memory for threats
-- **Named Pipe Monitoring** - Detects suspicious named pipe usage
-- **DNS Exfiltration Detection** - Identifies DNS tunneling and exfiltration
-- **Beacon Detection** - Detects C2 beaconing patterns
-- **Code Injection Detection** - Identifies code injection attacks
-- **Data Exfiltration Detection** - Monitors for data exfiltration attempts
-- **ELF Catcher** - Detects Linux binaries on Windows (WSL/malicious)
-- **File Entropy Detection** - Identifies encrypted/packed files
-- **Honeypot Monitoring** - Monitors honeypot files for unauthorized access
-- **Lateral Movement Detection** - Detects lateral movement techniques
-- **Process Creation Detection** - Monitors process creation events
-- **Quarantine Management** - Automatic threat quarantine system
-- **Reflective DLL Injection Detection** - Detects reflective DLL injection
-- **Response Engine** - Automated threat response system
+#### Process & Memory Protection
+- **Process Anomaly Detection**: Monitors for suspicious process behavior
+- **Process Hollowing Detection**: Detects process hollowing attacks
+- **Process Creation Detection**: Real-time monitoring of new process creation
+- **Memory Scanning**: Scans process memory for malicious patterns
+- **Code Injection Detection**: Detects code injection techniques
+- **Reflective DLL Injection Detection**: Identifies reflective DLL loading
 
-### Advanced Security Features
+#### Persistence Detection
+- **Registry Persistence Detection**: Monitors registry for persistence mechanisms
+- **Scheduled Task Detection**: Identifies suspicious scheduled tasks
+- **WMI Persistence Detection**: Detects WMI-based persistence
+- **Service Monitoring**: Monitors system services for anomalies
 
-- **YouTube Ad Blocker** - Local proxy-based ad blocking for YouTube
-- **Password Management** - Automatic password rotation and security monitoring
-- **Webcam Guardian** - Permission-based webcam access control
-- **Key Scrambler** - Inline keystroke scrambling protection
-- **Auto-Restart Protection** - Automatic restart on termination
-- **Termination Protection** - Prevents unauthorized script termination
-- **Process Watchdog** - Monitors and restarts the protection system
+#### Network Security
+- **Network Anomaly Detection**: Identifies unusual network patterns
+- **Network Traffic Monitoring**: Monitors network connections and traffic
+- **DNS Exfiltration Detection**: Detects DNS-based data exfiltration
+- **Beacon Detection**: Identifies C2 beacon communications
+- **Data Exfiltration Detection**: Monitors for unauthorized data transfers
 
-## 📋 Requirements
+#### Advanced Threat Detection
+- **LOLBin Detection**: Identifies Living Off The Land binary usage
+- **AMSIBypass Detection**: Detects AMSI bypass attempts
+- **Credential Dump Detection**: Monitors for credential harvesting
+- **Token Manipulation Detection**: Detects token manipulation attacks
+- **DLL Hijacking Detection**: Identifies DLL hijacking attempts
+- **Rootkit Detection**: Scans for rootkit presence
+- **Fileless Detection**: Detects fileless malware techniques
 
-- **Operating System:** Windows 10/11
-- **PowerShell:** Version 5.1 or higher
-- **Privileges:** Administrator rights (required)
-- **Internet:** Optional (for hash lookups and YouTube ad blocking)
+#### Ransomware & Data Protection
+- **Ransomware Detection**: Real-time ransomware activity monitoring
+- **Shadow Copy Monitoring**: Protects against shadow copy deletion
+- **Clipboard Monitoring**: Monitors clipboard for sensitive data
 
-## 🚀 Installation
+#### System Monitoring
+- **USB Monitoring**: Tracks USB device connections
+- **Event Log Monitoring**: Monitors Windows event logs
+- **Firewall Rule Monitoring**: Tracks firewall rule changes
+- **Named Pipe Monitoring**: Monitors inter-process communication
+- **COM Monitoring**: Monitors COM object usage
+- **Browser Extension Monitoring**: Tracks browser extension installations
 
-1. **Download the script:**
+#### Privacy & Additional Features
+- **Webcam Guardian**: Protects against unauthorized webcam access
+- **Keylogger Detection**: Detects keylogging attempts
+- **Key Scrambler Management**: Provides keyboard input protection
+- **Password Management**: Secure password management and rotation
+- **PrivacyForge Spoofing**: System fingerprint spoofing for privacy
+- **YouTube Ad Blocker**: Built-in ad blocking for YouTube
+- **Honeypot Monitoring**: Deceptive file monitoring
+- **Lateral Movement Detection**: Detects lateral movement attempts
+- **ElfCatcher**: Advanced threat detection module
+
+#### Response & Management
+- **Response Engine**: Automated threat response actions
+- **Quarantine Management**: Automatic threat quarantine and cleanup
+
+## 🔧 Requirements
+
+- **PowerShell Version**: 5.1 or higher
+- **Permissions**: Administrator privileges (required)
+- **OS**: Windows 10/11 or Windows Server
+- **Internet Connection**: Optional (for hash lookups and API queries)
+
+## 📦 Installation
+
+1. **Download the script**: Save `Antivirus.ps1` to your desired location
+
+2. **Run as Administrator**: Right-click PowerShell and select "Run as Administrator"
+
+3. **Execute the script**:
    ```powershell
-   # Clone or download AlmostPerfect.ps1
+   .\Antivirus.ps1
    ```
 
-2. **Run as Administrator:**
-   ```powershell
-   # Right-click PowerShell and select "Run as Administrator"
-   Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-   .\AlmostPerfect.ps1
-   ```
+4. The script will:
+   - Create installation directory: `C:\ProgramData\AntivirusProtection`
+   - Set up logging, quarantine, and data directories
+   - Initialize detection modules
+   - Start all monitoring jobs
 
-3. **The script will automatically:**
-   - Install itself to `C:\ProgramData\AntivirusProtection\`
-   - Create necessary directories (Logs, Data, Quarantine, Reports)
-   - Set up persistence via scheduled task
-   - Start all detection modules
+## 🚀 Usage
 
-## 💻 Usage
-
-### Basic Usage
+### Starting the Antivirus
 
 ```powershell
-# Start the protection system
-.\AlmostPerfect.ps1
-
-# Uninstall (removes scheduled task and cleans up)
-.\AlmostPerfect.ps1 -Uninstall
+# Run with default settings
+.\Antivirus.ps1
 ```
 
-### Module Configuration
+### Uninstalling
 
-All modules run at configurable intervals defined in `$Script:ManagedJobConfig`:
+```powershell
+# Remove all components and stop monitoring
+.\Antivirus.ps1 -Uninstall
+```
+
+### Stopping the Antivirus
+
+- Press `Ctrl+C` multiple times (termination protection requires multiple attempts)
+- Or use the uninstall switch to properly remove the service
+
+## ⚙️ Configuration
+
+The script uses a configuration hash that can be modified at the top of the file:
+
+```powershell
+$Config = @{
+    EDRName = "MalwareDetector"
+    LogPath = "C:\ProgramData\AntivirusProtection\Logs"
+    QuarantinePath = "C:\ProgramData\AntivirusProtection\Quarantine"
+    DatabasePath = "C:\ProgramData\AntivirusProtection\Data"
+    WhitelistPath = "C:\ProgramData\AntivirusProtection\Data\whitelist.json"
+    ReportsPath = "C:\ProgramData\AntivirusProtection\Reports"
+    
+    EnableUnsignedDLLScanner = $true
+    AutoKillThreats = $true
+    AutoQuarantine = $true
+    MaxMemoryUsageMB = 500
+}
+```
+
+### Detection Intervals
+
+Detection module intervals can be configured in `$Script:ManagedJobConfig`:
 
 ```powershell
 $Script:ManagedJobConfig = @{
     HashDetectionIntervalSeconds = 15
     ProcessAnomalyDetectionIntervalSeconds = 15
     RansomwareDetectionIntervalSeconds = 15
-    # ... and 37 more modules
+    # ... etc
 }
 ```
-
-### Password Management
-
-The password management module provides:
-
-- **Automatic Password Rotation** - Rotates passwords every 10 minutes (configurable)
-- **Shutdown Reset** - Resets password to blank on shutdown/restart
-- **Security Monitoring** - Tracks password age, policy compliance, and suspicious activity
-- **Dumping Tool Detection** - Detects credential dumping tools (Mimikatz, etc.)
-
-Enabled by default with:
-- `EnablePasswordRotation = $true`
-- `ResetOnShutdown = $true`
-
-### YouTube Ad Blocker
-
-The YouTube ad blocker uses a local proxy server approach:
-
-- **Local Proxy Server** - Runs on `127.0.0.1:8080`
-- **PAC Configuration** - Uses GitHub-hosted PAC file
-- **JavaScript Injection** - Injects ad-skipping scripts into YouTube pages
-- **Safe Fallback** - Automatically restores internet settings if issues occur
-
-Runs every 5 minutes (300 seconds) by default.
-
-### Webcam Guardian
-
-Permission-based webcam access control:
-
-- **Default Disabled** - Webcam disabled by default
-- **Permission Prompts** - Shows dialog when applications request webcam access
-- **Auto-Disable** - Automatically disables when application closes
-- **Access Logging** - Logs all webcam access attempts
-
-### Key Scrambler
-
-Inline keystroke protection:
-
-- **C# Hook Implementation** - Low-level keyboard hook
-- **Random Flooding** - Injects random keystrokes to confuse keyloggers
-- **Process Protection** - Protects specific processes from keylogging
 
 ## 📁 Directory Structure
 
+After installation, the following structure is created:
+
 ```
 C:\ProgramData\AntivirusProtection\
-├── Logs\
-│   ├── antivirus_log.txt
-│   ├── stability_log.txt
-│   └── EDR_YYYY-MM-DD.log
-├── Data\
-│   ├── whitelist.json
-│   ├── db_integrity.hmac
-│   └── antivirus.pid
-├── Quarantine\
-│   └── [quarantined threats]
-└── Reports\
-    └── [threat reports]
-```
-
-## ⚙️ Configuration
-
-### Main Configuration
-
-```powershell
-$Config = @{
-    EDRName = "MalwareDetector"
-    LogPath = "$Script:InstallPath\Logs"
-    QuarantinePath = "$Script:InstallPath\Quarantine"
-    DatabasePath = "$Script:InstallPath\Data"
-    
-    # Threat Intelligence APIs
-    CirclHashLookupUrl = "https://hashlookup.circl.lu/lookup/sha256"
-    CymruApiUrl = "https://api.malwarehash.cymru.com/v1/hash"
-    MalwareBazaarApiUrl = "https://mb-api.abuse.ch/api/v1/"
-    
-    # Auto-response settings
-    AutoKillThreats = $true
-    AutoQuarantine = $true
-    EnableUnsignedDLLScanner = $true
-}
-```
-
-### YouTube Ad Blocker Configuration
-
-```powershell
-$Script:YouTubeAdBlockerConfig = @{
-    ProxyPort = 8080
-    ProxyHost = "127.0.0.1"
-    PACUrl = "https://raw.githubusercontent.com/ads-blocker/Pac/refs/heads/main/BlockAds.pac"
-    InstallDir = "$env:ProgramData\YouTubeAdBlocker"
-}
+├── Logs\              # System and detection logs
+├── Quarantine\        # Quarantined threats
+├── Data\              # Databases, whitelists, PID files
+└── Reports\           # Threat reports
 ```
 
 ## 🔍 Detection Capabilities
 
-### Threat Intelligence Integration
+### Hash Lookup Services
+- **CIRCL Hash Lookup**: SHA-256 hash verification
+- **MalwareHash Cymru**: Malware hash database
+- **MalwareBazaar**: Abuse.ch malware database
 
-- **CIRCL Hash Lookup** - SHA256 hash verification
-- **MalwareBazaar API** - Malware hash database
-- **Cymru Malware Hash Registry** - Additional hash verification
+### Threat Response
+- **Automatic Quarantine**: Suspicious files are automatically quarantined
+- **Process Termination**: Malicious processes can be automatically terminated
+- **Logging**: All detections are logged with timestamps and details
+- **Reporting**: Comprehensive threat reports generated
 
-### Behavioral Analysis
+## 🛡️ Protection Features
 
-- Process anomaly detection
-- Network traffic analysis
-- File entropy analysis
-- Memory scanning
-- Registry monitoring
+### Anti-Termination
+- Multiple termination protection mechanisms
+- Ctrl+C protection requiring multiple attempts
+- Process watchdog for automatic restart
+- Mutex-based single instance enforcement
 
-### Persistence Detection
+### Persistence
+- Automatic restart on system reboot (when run as admin)
+- Service-like behavior for continuous protection
+- Recovery sequences for failed modules
 
-- Scheduled tasks
-- Registry run keys
-- WMI event consumers
-- Service modifications
-- Startup folder monitoring
+## 📊 Monitoring & Logging
 
-## 🛡️ Security Features
-
-### Anti-Tampering
-
-- **Mutex Protection** - Prevents multiple instances
-- **Termination Protection** - Requires 5 Ctrl+C attempts to stop
-- **Auto-Restart** - Automatically restarts if terminated
-- **Process Watchdog** - Monitors and restarts the protection system
-
-### Logging & Reporting
-
-- Comprehensive event logging
-- Threat detection reports
-- Stability monitoring
-- EDR-style logging with module-specific logs
+- **Stability Log**: System stability and module status
+- **EDR Log**: Detection events and threat information
+- **Module Stats**: Performance metrics for each module
+- **Threat Reports**: Detailed threat analysis reports
 
 ## ⚠️ Important Notes
 
-### Administrator Privileges
+1. **Administrator Rights**: This script requires administrator privileges to function properly
+2. **Resource Usage**: Multiple background jobs run simultaneously; monitor system resources
+3. **Whitelisting**: Configure whitelist paths to avoid false positives
+4. **Internet Access**: Some features require internet connectivity for hash lookups
+5. **Termination**: Use the `-Uninstall` switch for proper cleanup
 
-This script **requires** Administrator privileges to function properly. Many detection modules need elevated permissions to:
-- Access system processes
-- Monitor registry changes
-- Scan system directories
-- Quarantine threats
-- Modify firewall rules
+## 🔐 Security Considerations
 
-### Internet Connectivity
+- The script modifies system settings and monitors sensitive areas
+- Review exclusion paths to ensure legitimate software isn't blocked
+- Whitelist trusted applications and paths
+- Monitor logs regularly for false positives
+- Consider the privacy implications of system monitoring
 
-Some features require internet connectivity:
-- Hash lookups (CIRCL, MalwareBazaar, Cymru)
-- YouTube ad blocker (PAC file download)
-- Threat intelligence updates
+## 📝 Author
 
-### Performance Impact
-
-The script is designed to be lightweight, but running 40+ detection modules may have some performance impact:
-- CPU usage varies by module interval
-- Memory usage: ~500MB max (configurable)
-- Disk I/O for logging and scanning
-
-### Password Management Warning
-
-⚠️ **IMPORTANT:** The password management feature will:
-- Automatically rotate your Windows password every 10 minutes
-- Reset your password to blank on shutdown/restart
-
-**This may lock you out of your system if you don't have alternative access methods!**
-
-## 🔧 Troubleshooting
-
-### Script Won't Start
-
-1. Ensure you're running as Administrator
-2. Check PowerShell execution policy:
-   ```powershell
-   Get-ExecutionPolicy
-   Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
-   ```
-
-### Modules Not Starting
-
-- Check logs in `C:\ProgramData\AntivirusProtection\Logs\`
-- Review stability log for errors
-- Verify all required directories exist
-
-### YouTube Ad Blocker Not Working
-
-1. Restart your browser after installation
-2. Check proxy is running: `netstat -an | findstr 8080`
-3. Verify internet connectivity
-4. Check logs in `$env:ProgramData\YouTubeAdBlocker\proxy.log`
-
-### Password Issues
-
-- Password rotation requires Administrator privileges
-- Ensure the account has permission to change passwords
-- Check event logs for password change errors
-
-## 📝 Logging
-
-All activities are logged to:
-
-- **Main Log:** `C:\ProgramData\AntivirusProtection\Logs\antivirus_log.txt`
-- **Stability Log:** `C:\ProgramData\AntivirusProtection\Logs\stability_log.txt`
-- **EDR Logs:** `C:\ProgramData\AntivirusProtection\Logs\EDR_YYYY-MM-DD.log`
-- **Module-Specific Logs:** Individual logs for each detection module
-
-## 🗑️ Uninstallation
-
-To completely remove AlmostPerfect.ps1:
-
-```powershell
-.\AlmostPerfect.ps1 -Uninstall
-```
-
-This will:
-- Stop all running jobs
-- Remove scheduled task
-- Clean up proxy settings (YouTube ad blocker)
-- Remove startup shortcuts
-- **Note:** Logs and quarantined files are preserved
+**Gorstak**
 
 ## 📄 License
 
-This project is provided as-is for educational and security research purposes.
-
-## ⚖️ Disclaimer
-
-**USE AT YOUR OWN RISK**
-
-This software is provided without warranty. The authors are not responsible for:
-- System lockouts due to password management
-- Performance impacts on your system
-- False positive detections
-- Any damage to your system or data
-
-Always test in a non-production environment first.
+This script is provided as-is for security and educational purposes.
 
 ## 🤝 Contributing
 
-Contributions, issues, and feature requests are welcome!
+This is a single-file modular system. To contribute:
+1. Review the module structure
+2. Follow existing function naming conventions
+3. Ensure proper error handling and logging
+4. Test thoroughly before deployment
 
-## 📧 Support
+## ⚡ Performance Tips
 
-For issues, questions, or contributions, please open an issue on the repository.
+- Adjust detection intervals based on system resources
+- Configure appropriate exclusion paths
+- Monitor memory usage (default max: 500MB)
+- Review and optimize whitelist configurations
+- Consider disabling unused modules for better performance
+
+## 🐛 Troubleshooting
+
+### Script won't start
+- Ensure PowerShell 5.1+ is installed
+- Verify administrator privileges
+- Check if another instance is running (mutex lock)
+
+### High resource usage
+- Increase detection intervals in `$Script:ManagedJobConfig`
+- Disable unused modules
+- Review exclusion paths
+
+### False positives
+- Add legitimate applications to whitelist
+- Review detection logs for patterns
+- Adjust detection sensitivity if possible
+
+### Module failures
+- Check stability logs: `C:\ProgramData\AntivirusProtection\Logs\stability_log.txt`
+- Verify system permissions
+- Review error messages in logs
 
 ---
 
-**Stay Protected! 🛡️**
+**⚠️ Disclaimer**: This tool is for security and educational purposes. Use responsibly and in accordance with applicable laws and regulations.
