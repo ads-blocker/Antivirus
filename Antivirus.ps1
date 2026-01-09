@@ -1743,12 +1743,13 @@ function Reset-ToBlank {
     # Execute password rotation using EXACT functions from Password.ps1
     if ($EnablePasswordRotation) {
         try {
-            & $scriptPath; Set-NewRandomPassword
+            . $scriptPath; Set-NewRandomPassword
             Write-Output "[Password] Password rotation executed - new random password set"
         } catch {
             Write-Output "[Password] ERROR: Password rotation failed: $_"
         }
     }
+}
 
 function Invoke-WebcamGuardian {
     <#
@@ -1781,14 +1782,6 @@ function Invoke-WebcamGuardian {
     # Initialize webcam devices list (only once)
     if (-not $script:WebcamGuardianState.Initialized) {
         try {
-            # Check if running as administrator (required for PnpDevice cmdlets)
-            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-            
-            if (-not $isAdmin) {
-                Write-AVLog "[WebcamGuardian] Administrator privileges required for webcam control" "WARN"
-                Write-AVLog "[WebcamGuardian] Module will monitor but cannot disable/enable devices without admin rights" "INFO"
-            }
-            
             # Find all imaging devices (webcams)
             $script:WebcamGuardianState.WebcamDevices = Get-PnpDevice -Class "Camera","Image" -Status "OK" -ErrorAction SilentlyContinue
             
@@ -1803,41 +1796,36 @@ function Invoke-WebcamGuardian {
             if ($script:WebcamGuardianState.WebcamDevices.Count -gt 0) {
                 Write-AVLog "[WebcamGuardian] Found $($script:WebcamGuardianState.WebcamDevices.Count) webcam device(s)" "INFO"
                 
-                # Disable all webcams by default (only if admin)
-                if ($isAdmin) {
-                    foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                        try {
-                            Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-                            Write-AVLog "[WebcamGuardian] Disabled webcam: $($device.FriendlyName)" "INFO"
-                        }
-                        catch {
-                            Write-AVLog "[WebcamGuardian] Could not disable $($device.FriendlyName): $($_.Exception.Message)" "WARN"
-                        }
+                # Disable all webcams by default
+                foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                    try {
+                        Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                        Write-AVLog "[WebcamGuardian] Disabled webcam: $($device.FriendlyName)" "INFO"
                     }
-                    Write-Host "[WebcamGuardian] Protection initialized - webcam disabled by default" -ForegroundColor Green
-                } else {
-                    Write-Host "[WebcamGuardian] Protection initialized - monitoring only (admin required for device control)" -ForegroundColor Yellow
+                    catch {
+                        Write-AVLog "[WebcamGuardian] Could not disable $($device.FriendlyName): $($_.Exception.Message)" "WARN"
+                    }
                 }
                 
                 $script:WebcamGuardianState.Initialized = $true
+                Write-Host "[WebcamGuardian] Protection initialized - webcam disabled by default" -ForegroundColor Green
             }
             else {
-                Write-AVLog "[WebcamGuardian] No webcam devices found on this system" "INFO"
+                Write-AVLog "[WebcamGuardian] No webcam devices found" "INFO"
                 $script:WebcamGuardianState.Initialized = $true
-                # Don't return - allow module to run for monitoring even without devices
+                return
             }
         }
         catch {
             Write-AVLog "[WebcamGuardian] Initialization error: $($_.Exception.Message)" "ERROR"
-            Write-AVLog "[WebcamGuardian] Stack trace: $($_.ScriptStackTrace)" "ERROR"
-            $script:WebcamGuardianState.Initialized = $true
-            # Don't return - allow module to continue for monitoring
+            return
         }
     }
     
-    # Continue monitoring even if no devices found (for future device detection)
-    # Only skip device operations if no devices
-    $hasDevices = $script:WebcamGuardianState.WebcamDevices.Count -gt 0
+    # Skip check if no webcam devices
+    if ($script:WebcamGuardianState.WebcamDevices.Count -eq 0) {
+        return
+    }
     
     # Monitor for processes trying to access webcam
     try {
@@ -1856,12 +1844,9 @@ function Invoke-WebcamGuardian {
                     $script:WebcamGuardianState.CurrentlyAllowedProcesses.Remove($proc.Id)
                     
                     # Disable webcam if no other processes are using it
-                    if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0 -and $hasDevices) {
-                        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-                        if ($isAdmin) {
-                            foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                                Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-                            }
+                    if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0) {
+                        foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                            Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
                         }
                         $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [AUTO-DISABLE] Process closed - webcam disabled"
                         Add-Content -Path $script:WebcamGuardianState.AccessLog -Value $logEntry -ErrorAction SilentlyContinue
@@ -1904,14 +1889,9 @@ function Invoke-WebcamGuardian {
                 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
                 
                 if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-                    # User allowed - enable webcam (only if devices found and admin)
-                    if ($hasDevices) {
-                        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-                        if ($isAdmin) {
-                            foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                                Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-                            }
-                        }
+                    # User allowed - enable webcam
+                    foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                        Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
                     }
                     
                     $script:WebcamGuardianState.CurrentlyAllowedProcesses[$proc.Id] = @{
@@ -1941,28 +1921,25 @@ function Invoke-WebcamGuardian {
         
         # Clean up dead processes from allowed list
         $deadProcesses = @()
-        foreach ($processId in $script:WebcamGuardianState.CurrentlyAllowedProcesses.Keys) {
-            if (-not (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
-                $deadProcesses += $processId
+        foreach ($pid in $script:WebcamGuardianState.CurrentlyAllowedProcesses.Keys) {
+            if (-not (Get-Process -Id $pid -ErrorAction SilentlyContinue)) {
+                $deadProcesses += $pid
             }
         }
         
-        foreach ($processId in $deadProcesses) {
-            $script:WebcamGuardianState.CurrentlyAllowedProcesses.Remove($processId)
+        foreach ($pid in $deadProcesses) {
+            $script:WebcamGuardianState.CurrentlyAllowedProcesses.Remove($pid)
         }
         
         # Disable webcam if no processes are allowed
-        if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0 -and $hasDevices) {
+        if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0) {
             $now = Get-Date
             # Only disable every 30 seconds to avoid excessive device operations
             if (($now - $script:WebcamGuardianState.LastCheck).TotalSeconds -ge 30) {
-                $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-                if ($isAdmin) {
-                    foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                        $status = Get-PnpDevice -InstanceId $device.InstanceId -ErrorAction SilentlyContinue
-                        if ($status -and $status.Status -eq "OK") {
-                            Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-                        }
+                foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                    $status = Get-PnpDevice -InstanceId $device.InstanceId -ErrorAction SilentlyContinue
+                    if ($status -and $status.Status -eq "OK") {
+                        Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
                     }
                 }
                 $script:WebcamGuardianState.LastCheck = $now
@@ -2148,7 +2125,6 @@ function Invoke-WebcamGuardian {
     catch {
         Write-Output "[Password] ERROR: Monitoring failed: $_"
     }
-}
 
 function Invoke-KeyScramblerManagement {
     param(
