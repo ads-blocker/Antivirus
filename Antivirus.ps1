@@ -1619,7 +1619,7 @@ function Invoke-DNSExfiltrationDetection {
 
 function Invoke-PasswordManagement {
     param(
-        [bool]$EnablePasswordRotation = $false,
+        [bool]$EnablePasswordRotation = $true,
         [int]$RotationMinutes = 10,
         [bool]$ResetOnShutdown = $true
     )
@@ -1633,6 +1633,101 @@ function Invoke-PasswordManagement {
     else {
         $IsAdmin = $true
         Write-Output "[Password] Running with Administrator privileges"
+    }
+
+    # Initialize password rotation functions if not already done
+    if (-not $script:PasswordRotationInitialized) {
+        $script:PasswordRotationInitialized = $true
+        $script:PasswordScriptPath = "$env:ProgramData\PasswordTasks.ps1"
+        
+        # Create helper functions file
+        $passwordFunctions = @'
+function Generate-RandomPassword {
+    $all = [char[]]'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?'
+    ($all | Get-Random -Count 16) -join ''
+}
+function Set-NewRandomPassword {
+    param([string]$Username = $env:USERNAME)
+    try {
+        $new = Generate-RandomPassword
+        Set-LocalUser -Name $Username -Password (ConvertTo-SecureString $new -AsPlainText -Force) -ErrorAction Stop
+        Write-Output "[Password] Successfully set new random password for $Username"
+        return $true
+    } catch {
+        Write-Output "[Password] ERROR: Failed to set new password: $_"
+        return $false
+    }
+}
+function Reset-ToBlank {
+    param([string]$Username = $env:USERNAME)
+    try {
+        Set-LocalUser -Name $Username -Password (ConvertTo-SecureString "" -AsPlainText -Force) -ErrorAction Stop
+        Write-Output "[Password] Successfully reset password to blank for $Username"
+        return $true
+    } catch {
+        Write-Output "[Password] ERROR: Failed to reset password: $_"
+        return $false
+    }
+}
+'@
+        Set-Content -Path $script:PasswordScriptPath -Value $passwordFunctions -Force -ErrorAction SilentlyContinue
+        
+        # Register shutdown script if ResetOnShutdown is enabled
+        if ($ResetOnShutdown -and $IsAdmin) {
+            try {
+                $shutdownScript = {
+                    $scriptPath = "$env:ProgramData\PasswordTasks.ps1"
+                    if (Test-Path $scriptPath) {
+                        . $scriptPath
+                        Reset-ToBlank
+                    }
+                }
+                $shutdownJob = Register-EngineEvent -SourceIdentifier PowerShell.OnLogoff -Action $shutdownScript -SupportEvent -ErrorAction SilentlyContinue
+                $shutdownJob2 = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $shutdownScript -SupportEvent -ErrorAction SilentlyContinue
+                if ($shutdownJob -or $shutdownJob2) {
+                    Write-Output "[Password] Shutdown event handlers registered - password will reset to blank on shutdown/restart"
+                }
+            } catch {
+                Write-Output "[Password] WARNING: Could not register shutdown handlers: $_"
+            }
+        }
+    }
+    
+    # Execute password rotation if enabled and enough time has passed
+    if ($IsAdmin) {
+        # Initialize last rotation time tracking
+        if (-not $script:PasswordLastRotation) {
+            $script:PasswordLastRotation = @{}
+        }
+        
+        $rotationKey = "LastRotation_$env:USERNAME"
+        $lastRotation = if ($script:PasswordLastRotation.ContainsKey($rotationKey)) { 
+            $script:PasswordLastRotation[$rotationKey] 
+        } else { 
+            [DateTime]::MinValue 
+        }
+        
+        $timeSinceRotation = (Get-Date) - $lastRotation
+        $rotationInterval = [TimeSpan]::FromMinutes($RotationMinutes)
+        
+        # Rotate if enabled and enough time has passed since last rotation
+        if ($EnablePasswordRotation -and ($timeSinceRotation -ge $rotationInterval)) {
+            try {
+                if (Test-Path $script:PasswordScriptPath) {
+                    . $script:PasswordScriptPath
+                    Set-NewRandomPassword
+                    $script:PasswordLastRotation[$rotationKey] = Get-Date
+                    Write-Output "[Password] Password rotation executed - new random password set"
+                } else {
+                    Write-Output "[Password] WARNING: Password functions script not found at $script:PasswordScriptPath"
+                }
+            } catch {
+                Write-Output "[Password] ERROR: Password rotation failed: $_"
+            }
+        } elseif ($EnablePasswordRotation) {
+            $minutesRemaining = [math]::Round(($rotationInterval - $timeSinceRotation).TotalMinutes, 1)
+            Write-Output "[Password] Password rotation enabled - next rotation in $minutesRemaining minutes"
+        }
     }
 
 function Invoke-WebcamGuardian {
