@@ -57,6 +57,7 @@ $Script:ManagedJobConfig = @{
     QuarantineManagementIntervalSeconds = 300
     ReflectiveDLLInjectionDetectionIntervalSeconds = 30
     ResponseEngineIntervalSeconds = 10
+    PrivacyForgeSpoofingIntervalSeconds = 60
 }
 
 $Config = @{
@@ -2912,6 +2913,193 @@ function Invoke-ResponseEngine {
     }
 }
 
+# PrivacyForge Spoofing Module (Converted from Spoofer.py)
+function Invoke-PrivacyForgeSpoofing {
+    param(
+        [hashtable]$Config
+    )
+    
+    # Initialize script-level variables if not already set
+    if (-not $Script:PrivacyForgeIdentity) {
+        $Script:PrivacyForgeIdentity = @{}
+        $Script:PrivacyForgeDataCollected = 0
+        $Script:PrivacyForgeRotationInterval = 3600  # 1 hour
+        $Script:PrivacyForgeDataThreshold = 50
+        $Script:PrivacyForgeLastRotation = Get-Date
+    }
+    
+    try {
+        # Check if rotation is needed
+        $timeSinceRotation = (Get-Date) - $Script:PrivacyForgeLastRotation
+        $shouldRotate = $false
+        
+        if ($timeSinceRotation.TotalSeconds -ge $Script:PrivacyForgeRotationInterval) {
+            $shouldRotate = $true
+            Write-AVLog "PrivacyForge: Time-based rotation triggered" "INFO"
+        }
+        
+        if ($Script:PrivacyForgeDataCollected -ge $Script:PrivacyForgeDataThreshold) {
+            $shouldRotate = $true
+            Write-AVLog "PrivacyForge: Data threshold reached ($Script:PrivacyForgeDataCollected/$Script:PrivacyForgeDataThreshold)" "INFO"
+        }
+        
+        if ($shouldRotate -or (-not $Script:PrivacyForgeIdentity.ContainsKey("name"))) {
+            Invoke-PrivacyForgeRotateIdentity
+        }
+        
+        # Simulate data collection
+        $Script:PrivacyForgeDataCollected += Get-Random -Minimum 1 -Maximum 6
+        
+        # Perform spoofing operations
+        Invoke-PrivacyForgeSpoofSoftwareMetadata
+        Invoke-PrivacyForgeSpoofGameTelemetry
+        Invoke-PrivacyForgeSpoofSensors
+        Invoke-PrivacyForgeSpoofSystemMetrics
+        Invoke-PrivacyForgeSpoofClipboard
+        
+        Write-AVLog "PrivacyForge: Spoofing active - Data collected: $Script:PrivacyForgeDataCollected/$Script:PrivacyForgeDataThreshold" "INFO"
+        
+    } catch {
+        Write-AVLog "PrivacyForge: Error - $_" "ERROR"
+    }
+}
+
+function Invoke-PrivacyForgeGenerateIdentity {
+    # Generate fake identity data
+    $firstNames = @("John", "Jane", "Michael", "Sarah", "David", "Emily", "James", "Jessica", "Robert", "Amanda", "William", "Ashley", "Richard", "Melissa", "Joseph", "Nicole")
+    $lastNames = @("Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Wilson", "Anderson", "Thomas", "Taylor")
+    $domains = @("gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "protonmail.com")
+    $cities = @("New York", "Los Angeles", "Chicago", "Houston", "Phoenix", "Philadelphia", "San Antonio", "San Diego", "Dallas", "San Jose")
+    $countries = @("United States", "Canada", "United Kingdom", "Australia", "Germany", "France", "Spain", "Italy")
+    $languages = @("en-US", "fr-FR", "es-ES", "de-DE", "it-IT", "pt-BR")
+    $interests = @("tech", "gaming", "news", "sports", "music", "movies", "travel", "food", "fitness", "books")
+    
+    $firstName = Get-Random -InputObject $firstNames
+    $lastName = Get-Random -InputObject $lastNames
+    $username = "$firstName$lastName" + (Get-Random -Minimum 100 -Maximum 9999)
+    $domain = Get-Random -InputObject $domains
+    $email = "$username@$domain"
+    
+    $userAgents = @(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edge/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    
+    return @{
+        "name" = "$firstName $lastName"
+        "email" = $email
+        "username" = $username
+        "location" = Get-Random -InputObject $cities
+        "country" = Get-Random -InputObject $countries
+        "user_agent" = Get-Random -InputObject $userAgents
+        "screen_resolution" = "$(Get-Random -Minimum 800 -Maximum 1920)x$(Get-Random -Minimum 600 -Maximum 1080)"
+        "interests" = (Get-Random -InputObject $interests -Count 4)
+        "device_id" = [System.Guid]::NewGuid().ToString()
+        "mac_address" = "{0:X2}-{1:X2}-{2:X2}-{3:X2}-{4:X2}-{5:X2}" -f (Get-Random -Minimum 0 -Maximum 256), (Get-Random -Minimum 0 -Maximum 256), (Get-Random -Minimum 0 -Maximum 256), (Get-Random -Minimum 0 -Maximum 256), (Get-Random -Minimum 0 -Maximum 256), (Get-Random -Minimum 0 -Maximum 256)
+        "language" = Get-Random -InputObject $languages
+        "timezone" = (Get-TimeZone).Id
+        "timestamp" = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+}
+
+function Invoke-PrivacyForgeRotateIdentity {
+    $Script:PrivacyForgeIdentity = Invoke-PrivacyForgeGenerateIdentity
+    $Script:PrivacyForgeDataCollected = 0
+    $Script:PrivacyForgeLastRotation = Get-Date
+    
+    Write-AVLog "PrivacyForge: Identity rotated - Name: $($Script:PrivacyForgeIdentity.name), Username: $($Script:PrivacyForgeIdentity.username)" "INFO"
+}
+
+function Invoke-PrivacyForgeSpoofSoftwareMetadata {
+    try {
+        $headers = @{
+            "User-Agent" = $Script:PrivacyForgeIdentity.user_agent
+            "Cookie" = "session_id=$(Get-Random -Minimum 1000 -Maximum 9999); fake_id=$([System.Guid]::NewGuid().ToString())"
+            "X-Device-ID" = $Script:PrivacyForgeIdentity.device_id
+            "Accept-Language" = $Script:PrivacyForgeIdentity.language
+            "X-Timezone" = $Script:PrivacyForgeIdentity.timezone
+        }
+        
+        # Attempt to send spoofed headers (non-blocking)
+        try {
+            $response = Invoke-WebRequest -Uri "https://httpbin.org/headers" -Headers $headers -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
+            Write-AVLog "PrivacyForge: Sent spoofed software metadata headers" "DEBUG"
+        } catch {
+            # Silently fail - network may not be available
+        }
+    } catch {
+        Write-AVLog "PrivacyForge: Error spoofing software metadata - $_" "WARN"
+    }
+}
+
+function Invoke-PrivacyForgeSpoofGameTelemetry {
+    try {
+        $fakeTelemetry = @{
+            "player_id" = [System.Guid]::NewGuid().ToString()
+            "hardware_id" = ((New-Object System.Security.Cryptography.SHA256Managed).ComputeHash([System.Text.Encoding]::UTF8.GetBytes((Get-Random).ToString())) | ForEach-Object { $_.ToString("X2") }) -join ''
+            "latency" = Get-Random -Minimum 20 -Maximum 200
+            "game_version" = "$(Get-Random -Minimum 1 -Maximum 5).$(Get-Random -Minimum 0 -Maximum 9)"
+            "fps" = Get-Random -Minimum 30 -Maximum 120
+        }
+        Write-AVLog "PrivacyForge: Spoofed game telemetry - Player ID: $($fakeTelemetry.player_id)" "DEBUG"
+    } catch {
+        Write-AVLog "PrivacyForge: Error spoofing game telemetry - $_" "WARN"
+    }
+}
+
+function Invoke-PrivacyForgeSpoofSensors {
+    try {
+        $sensors = @{
+            "accelerometer" = @{
+                "x" = (Get-Random -Minimum -1000 -Maximum 1000) / 100.0
+                "y" = (Get-Random -Minimum -1000 -Maximum 1000) / 100.0
+                "z" = (Get-Random -Minimum -1000 -Maximum 1000) / 100.0
+            }
+            "gyroscope" = @{
+                "pitch" = (Get-Random -Minimum -18000 -Maximum 18000) / 100.0
+                "roll" = (Get-Random -Minimum -18000 -Maximum 18000) / 100.0
+                "yaw" = (Get-Random -Minimum -18000 -Maximum 18000) / 100.0
+            }
+            "magnetometer" = @{
+                "x" = (Get-Random -Minimum -5000 -Maximum 5000) / 100.0
+                "y" = (Get-Random -Minimum -5000 -Maximum 5000) / 100.0
+                "z" = (Get-Random -Minimum -5000 -Maximum 5000) / 100.0
+            }
+            "light_sensor" = (Get-Random -Minimum 0 -Maximum 1000) / 1.0
+            "proximity_sensor" = Get-Random -InputObject @(0, 5, 10)
+            "ambient_temperature" = (Get-Random -Minimum 1500 -Maximum 3500) / 100.0
+        }
+        Write-AVLog "PrivacyForge: Spoofed sensor data" "DEBUG"
+    } catch {
+        Write-AVLog "PrivacyForge: Error spoofing sensors - $_" "WARN"
+    }
+}
+
+function Invoke-PrivacyForgeSpoofSystemMetrics {
+    try {
+        $fakeMetrics = @{
+            "cpu_usage" = (Get-Random -Minimum 0 -Maximum 10000) / 100.0
+            "memory_usage" = (Get-Random -Minimum 1000 -Maximum 9000) / 100.0
+            "battery_level" = Get-Random -Minimum 20 -Maximum 100
+        }
+        Write-AVLog "PrivacyForge: Spoofed system metrics - CPU: $($fakeMetrics.cpu_usage)%, Memory: $($fakeMetrics.memory_usage)%" "DEBUG"
+    } catch {
+        Write-AVLog "PrivacyForge: Error spoofing system metrics - $_" "WARN"
+    }
+}
+
+function Invoke-PrivacyForgeSpoofClipboard {
+    try {
+        $fakeContent = "PrivacyForge: $(Get-Random -Minimum 100000 -Maximum 999999) - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        Set-Clipboard -Value $fakeContent -ErrorAction SilentlyContinue
+        Write-AVLog "PrivacyForge: Spoofed clipboard content" "DEBUG"
+    } catch {
+        Write-AVLog "PrivacyForge: Error spoofing clipboard - $_" "WARN"
+    }
+}
+
 #endregion
 
 function Set-HostsFileBlock {
@@ -3427,7 +3615,8 @@ Write-Host "[PROTECTION] Anti-termination safeguards active" -ForegroundColor Gr
         "ProcessCreationDetection",
         "QuarantineManagement",
         "ReflectiveDLLInjectionDetection",
-        "ResponseEngine"
+        "ResponseEngine",
+        "PrivacyForgeSpoofing"
     )
 
     foreach ($modName in $moduleNames) {
