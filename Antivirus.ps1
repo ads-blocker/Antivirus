@@ -226,9 +226,14 @@ function Install-Antivirus {
     $targetScript = Join-Path $Script:InstallPath $Script:ScriptName
     $currentPath = $PSCommandPath
 
+    # Set SelfPath to the installed script location (used by auto-restart and watchdog)
+    $Script:SelfPath = $targetScript
+
     if ($currentPath -eq $targetScript) {
         Write-Host "[+] Running from install location" -ForegroundColor Green
         $Global:AntivirusState.Installed = $true
+        # Initialize mutex BEFORE creating persistence to prevent race conditions during setup
+        Initialize-Mutex
         Install-Persistence
         return $true
     }
@@ -246,6 +251,9 @@ function Install-Antivirus {
     Copy-Item -Path $PSCommandPath -Destination $targetScript -Force
     Write-Host "[+] Copied main script to $targetScript"
 
+    # Initialize mutex BEFORE creating persistence to prevent race conditions during setupcomplete.cmd
+    # This ensures only one instance can acquire the mutex before scheduled tasks are created
+    Initialize-Mutex
     Install-Persistence
 
     Write-Host "`n[+] Installation complete. Continuing in this instance...`n" -ForegroundColor Green
@@ -256,6 +264,10 @@ function Install-Antivirus {
 function Install-Persistence {
     Write-Host "`n[*] Setting up persistence for automatic startup...`n" -ForegroundColor Cyan
 
+    # Define paths for cleanup
+    $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    $shortcutPath = Join-Path $startupFolder "AntivirusProtection.lnk"
+
     try {
         Get-ScheduledTask -TaskName "AntivirusProtection" -ErrorAction SilentlyContinue |
             Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
@@ -264,9 +276,16 @@ function Install-Persistence {
         $taskTrigger = New-ScheduledTaskTrigger -AtLogon -User $env:USERNAME
         $taskTriggerBoot = New-ScheduledTaskTrigger -AtStartup
         $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-        $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable -DontStopOnIdleEnd
+        $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd
 
         Register-ScheduledTask -TaskName "AntivirusProtection" -Action $taskAction -Trigger $taskTrigger,$taskTriggerBoot -Principal $taskPrincipal -Settings $taskSettings -Force -ErrorAction Stop
+
+        # Remove startup shortcut if it exists (scheduled task is preferred method)
+        if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+            Write-Host "[+] Removed startup shortcut (using scheduled task instead)" -ForegroundColor Green
+            Write-StabilityLog "Removed startup shortcut - scheduled task is active"
+        }
 
         Write-Host "[+] Scheduled task created for automatic startup" -ForegroundColor Green
         Write-StabilityLog "Persistence setup completed - scheduled task created"
@@ -276,8 +295,9 @@ function Install-Persistence {
         Write-StabilityLog "Persistence setup failed: $_" "ERROR"
 
         try {
-            $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-            $shortcutPath = Join-Path $startupFolder "AntivirusProtection.lnk"
+            # Ensure scheduled task is removed before creating shortcut
+            Get-ScheduledTask -TaskName "AntivirusProtection" -ErrorAction SilentlyContinue |
+                Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
 
             $shell = New-Object -ComObject WScript.Shell
             $shortcut = $shell.CreateShortcut($shortcutPath)
@@ -390,9 +410,48 @@ function Initialize-Mutex {
         $acquired = $Global:AntivirusState.Mutex.WaitOne(3000)
 
         if (!$acquired) {
-            Write-StabilityLog "Failed to acquire mutex - another instance is running" "ERROR"
-            Write-Host "[!] Failed to acquire mutex - another instance is running" -ForegroundColor Yellow
-            throw "Another instance is already running (mutex locked)"
+            # Mutex is locked - check if there's actually a running instance
+            Write-StabilityLog "Mutex locked - checking for running instances" "WARN"
+            
+            $runningInstances = Get-Process powershell -ErrorAction SilentlyContinue | Where-Object {
+                try {
+                    $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
+                    if ($cmdLine -and $cmdLine -like "*$($Script:ScriptName)*") {
+                        return $true
+                    }
+                } catch {}
+                return $false
+            }
+            
+            if ($runningInstances) {
+                Write-StabilityLog "Blocked duplicate instance - found $($runningInstances.Count) running PowerShell process(es) with script" "WARN"
+                Write-Host "[!] Another instance is already running (PIDs: $($runningInstances.Id -join ', '))" -ForegroundColor Yellow
+                Write-AVLog "Blocked duplicate instance - found running processes" "WARN"
+                $Global:AntivirusState.Mutex.Dispose()
+                throw "Another instance is already running (mutex locked)"
+            } else {
+                # Mutex is orphaned (no actual process running) - try to release it
+                Write-StabilityLog "Mutex appears orphaned - no running instances found, attempting cleanup" "WARN"
+                try {
+                    # Try to create a new mutex with the same name to see if we can take ownership
+                    # This is a workaround for orphaned mutexes
+                    $Global:AntivirusState.Mutex.Dispose()
+                    Start-Sleep -Milliseconds 500
+                    $Global:AntivirusState.Mutex = New-Object System.Threading.Mutex($false, $mutexName)
+                    $acquired = $Global:AntivirusState.Mutex.WaitOne(1000)
+                    if ($acquired) {
+                        Write-StabilityLog "Successfully recovered orphaned mutex" "INFO"
+                    } else {
+                        Write-StabilityLog "Could not recover mutex - may need manual cleanup" "ERROR"
+                        Write-Host "[!] Failed to acquire mutex - another instance may be running" -ForegroundColor Yellow
+                        throw "Another instance is already running (mutex locked)"
+                    }
+                } catch {
+                    Write-StabilityLog "Mutex recovery failed: $_" "ERROR"
+                    Write-Host "[!] Failed to acquire mutex - another instance may be running" -ForegroundColor Yellow
+                    throw "Another instance is already running (mutex locked)"
+                }
+            }
         }
 
         if (!(Test-Path (Split-Path $Config.PIDFilePath -Parent))) {
@@ -1627,12 +1686,12 @@ function Invoke-PasswordManagement {
 
     Write-Output "[Password] Starting password management monitoring..."
 
-    if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole("Administrator")) {
+    $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    
+    if (-not $IsAdmin) {
         Write-Output "[Password] WARNING: Not running as Administrator - limited functionality"
-        $IsAdmin = $false
     }
     else {
-        $IsAdmin = $true
         Write-Output "[Password] Running with Administrator privileges"
     }
 
@@ -1762,6 +1821,14 @@ function Invoke-WebcamGuardian {
     # Initialize webcam devices list (only once)
     if (-not $script:WebcamGuardianState.Initialized) {
         try {
+            # Check if running as administrator (required for PnpDevice cmdlets)
+            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            
+            if (-not $isAdmin) {
+                Write-AVLog "[WebcamGuardian] Administrator privileges required for webcam control" "WARN"
+                Write-AVLog "[WebcamGuardian] Module will monitor but cannot disable/enable devices without admin rights" "INFO"
+            }
+            
             # Find all imaging devices (webcams)
             $script:WebcamGuardianState.WebcamDevices = Get-PnpDevice -Class "Camera","Image" -Status "OK" -ErrorAction SilentlyContinue
             
@@ -1776,36 +1843,41 @@ function Invoke-WebcamGuardian {
             if ($script:WebcamGuardianState.WebcamDevices.Count -gt 0) {
                 Write-AVLog "[WebcamGuardian] Found $($script:WebcamGuardianState.WebcamDevices.Count) webcam device(s)" "INFO"
                 
-                # Disable all webcams by default
-                foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                    try {
-                        Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
-                        Write-AVLog "[WebcamGuardian] Disabled webcam: $($device.FriendlyName)" "INFO"
+                # Disable all webcams by default (only if admin)
+                if ($isAdmin) {
+                    foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                        try {
+                            Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                            Write-AVLog "[WebcamGuardian] Disabled webcam: $($device.FriendlyName)" "INFO"
+                        }
+                        catch {
+                            Write-AVLog "[WebcamGuardian] Could not disable $($device.FriendlyName): $($_.Exception.Message)" "WARN"
+                        }
                     }
-                    catch {
-                        Write-AVLog "[WebcamGuardian] Could not disable $($device.FriendlyName): $($_.Exception.Message)" "WARN"
-                    }
+                    Write-Host "[WebcamGuardian] Protection initialized - webcam disabled by default" -ForegroundColor Green
+                } else {
+                    Write-Host "[WebcamGuardian] Protection initialized - monitoring only (admin required for device control)" -ForegroundColor Yellow
                 }
                 
                 $script:WebcamGuardianState.Initialized = $true
-                Write-Host "[WebcamGuardian] Protection initialized - webcam disabled by default" -ForegroundColor Green
             }
             else {
-                Write-AVLog "[WebcamGuardian] No webcam devices found" "INFO"
+                Write-AVLog "[WebcamGuardian] No webcam devices found on this system" "INFO"
                 $script:WebcamGuardianState.Initialized = $true
-                return
+                # Don't return - allow module to run for monitoring even without devices
             }
         }
         catch {
             Write-AVLog "[WebcamGuardian] Initialization error: $($_.Exception.Message)" "ERROR"
-            return
+            Write-AVLog "[WebcamGuardian] Stack trace: $($_.ScriptStackTrace)" "ERROR"
+            $script:WebcamGuardianState.Initialized = $true
+            # Don't return - allow module to continue for monitoring
         }
     }
     
-    # Skip check if no webcam devices
-    if ($script:WebcamGuardianState.WebcamDevices.Count -eq 0) {
-        return
-    }
+    # Continue monitoring even if no devices found (for future device detection)
+    # Only skip device operations if no devices
+    $hasDevices = $script:WebcamGuardianState.WebcamDevices.Count -gt 0
     
     # Monitor for processes trying to access webcam
     try {
@@ -1824,9 +1896,12 @@ function Invoke-WebcamGuardian {
                     $script:WebcamGuardianState.CurrentlyAllowedProcesses.Remove($proc.Id)
                     
                     # Disable webcam if no other processes are using it
-                    if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0) {
-                        foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                            Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                    if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0 -and $hasDevices) {
+                        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+                        if ($isAdmin) {
+                            foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                                Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                            }
                         }
                         $logEntry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [AUTO-DISABLE] Process closed - webcam disabled"
                         Add-Content -Path $script:WebcamGuardianState.AccessLog -Value $logEntry -ErrorAction SilentlyContinue
@@ -1869,9 +1944,14 @@ function Invoke-WebcamGuardian {
                 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
                 
                 if ($result -eq [System.Windows.Forms.DialogResult]::Yes) {
-                    # User allowed - enable webcam
-                    foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                        Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                    # User allowed - enable webcam (only if devices found and admin)
+                    if ($hasDevices) {
+                        $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+                        if ($isAdmin) {
+                            foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                                Enable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                            }
+                        }
                     }
                     
                     $script:WebcamGuardianState.CurrentlyAllowedProcesses[$proc.Id] = @{
@@ -1912,14 +1992,17 @@ function Invoke-WebcamGuardian {
         }
         
         # Disable webcam if no processes are allowed
-        if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0) {
+        if ($script:WebcamGuardianState.CurrentlyAllowedProcesses.Count -eq 0 -and $hasDevices) {
             $now = Get-Date
             # Only disable every 30 seconds to avoid excessive device operations
             if (($now - $script:WebcamGuardianState.LastCheck).TotalSeconds -ge 30) {
-                foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
-                    $status = Get-PnpDevice -InstanceId $device.InstanceId -ErrorAction SilentlyContinue
-                    if ($status -and $status.Status -eq "OK") {
-                        Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+                if ($isAdmin) {
+                    foreach ($device in $script:WebcamGuardianState.WebcamDevices) {
+                        $status = Get-PnpDevice -InstanceId $device.InstanceId -ErrorAction SilentlyContinue
+                        if ($status -and $status.Status -eq "OK") {
+                            Disable-PnpDevice -InstanceId $device.InstanceId -Confirm:$false -ErrorAction SilentlyContinue
+                        }
                     }
                 }
                 $script:WebcamGuardianState.LastCheck = $now
@@ -2063,7 +2146,7 @@ function Invoke-WebcamGuardian {
 
         if ($EnablePasswordRotation -and $IsAdmin) {
             Write-Output "[Password] Password rotation enabled - every $RotationMinutes minutes"
-            Write-Output "[Password] INFO: Password rotation requires scheduled task setup"
+            Write-Output "[Password] INFO: Password rotation runs automatically via managed job system"
         }
 
         try {
@@ -2186,8 +2269,8 @@ public class KeyScrambler
         if (_hookID == IntPtr.Zero)
             throw new Exception("Hook failed: " + Marshal.GetLastWin32Error());
 
-        Console.WriteLine("KeyScrambler ACTIVE — invisible mode ON");
-        Console.WriteLine("You see only your real typing • Keyloggers blinded");
+        Console.WriteLine("KeyScrambler ACTIVE - invisible mode ON");
+        Console.WriteLine("You see only your real typing * Keyloggers blinded");
 
         MSG msg;
         while (GetMessage(out msg, IntPtr.Zero, 0, 0))
@@ -3529,6 +3612,22 @@ try {
         Uninstall-Antivirus
     }
 
+    # Check for administrator privileges
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    
+    if (-not $isAdmin) {
+        Write-Host "`n[!] WARNING: Script is not running as Administrator!" -ForegroundColor Red
+        Write-Host "[!] Some features require administrator privileges:" -ForegroundColor Yellow
+        Write-Host "    - WebcamGuardian (device control)" -ForegroundColor Yellow
+        Write-Host "    - Password Management (registry access)" -ForegroundColor Yellow
+        Write-Host "    - Some detection modules" -ForegroundColor Yellow
+        Write-Host "`n[i] To run with full functionality, right-click PowerShell and select 'Run as Administrator'" -ForegroundColor Cyan
+        Write-Host "`n[i] Continuing with limited functionality...`n" -ForegroundColor Gray
+        Write-StabilityLog "Script running without administrator privileges - limited functionality" "WARN"
+    } else {
+        Write-StabilityLog "Script running with administrator privileges" "INFO"
+    }
+
     Write-Host "`nAntivirus Protection (Single File)`n" -ForegroundColor Cyan
     Write-StabilityLog "=== Antivirus Starting ==="
 
@@ -3537,7 +3636,11 @@ try {
     Register-ExitCleanup
 
     Install-Antivirus
-    Initialize-Mutex
+    
+    # Only initialize mutex if not already initialized during installation
+    if (-not $Global:AntivirusState.Running) {
+        Initialize-Mutex
+    }
 
     Register-TerminationProtection
 
