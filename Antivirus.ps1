@@ -148,11 +148,11 @@ function Reset-InternetProxySettings {
     try {
         # Stop proxy server if running
         if (Test-Path $Script:YouTubeAdBlockerConfig.PIDFile) {
-            $pid = Get-Content -Path $Script:YouTubeAdBlockerConfig.PIDFile -ErrorAction SilentlyContinue
-            if ($pid) {
-                $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $storedPid = Get-Content -Path $Script:YouTubeAdBlockerConfig.PIDFile -ErrorAction SilentlyContinue
+            if ($storedPid) {
+                $process = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
                 if ($process) {
-                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+                    Stop-Process -Id $storedPid -Force -ErrorAction SilentlyContinue
                 }
             }
             Remove-Item -Path $Script:YouTubeAdBlockerConfig.PIDFile -Force -ErrorAction SilentlyContinue
@@ -199,12 +199,28 @@ function Reset-InternetProxySettings {
     # Remove hosts file entries
     try {
         $hostsPath = "C:\Windows\System32\drivers\etc\hosts"
-        $hostsContent = Get-Content $hostsPath
-        $cleanContent = $hostsContent | Where-Object { $_ -notmatch "# Ad Blocking" -and $_ -notmatch "127\.0\.0\.1.*ads?" -and $_ -notmatch "127\.0\.0\.1.*doubleclick" -and $_ -notmatch "127\.0\.0\.1.*googleads" }
-        Set-Content $hostsPath $cleanContent -Encoding UTF8
-        ipconfig /flushdns | Out-Null
+        if (Test-Path $hostsPath) {
+            # Read content and close file handle properly
+            $hostsContent = @()
+            Get-Content $hostsPath -ErrorAction Stop | ForEach-Object { $hostsContent += $_ }
+            
+            # Filter out ad blocking entries
+            $cleanContent = $hostsContent | Where-Object { 
+                $_ -notmatch "# Ad Blocking" -and 
+                $_ -notmatch "127\.0\.0\.1.*ads?" -and 
+                $_ -notmatch "127\.0\.0\.1.*doubleclick" -and 
+                $_ -notmatch "127\.0\.0\.1.*googleads" 
+            }
+            
+            # Write using file stream to handle locks better
+            $cleanContent | Out-File -FilePath $hostsPath -Encoding ASCII -Force -ErrorAction Stop
+            ipconfig /flushdns | Out-Null
+            Write-Output "[Uninstall] Successfully cleaned hosts file"
+        }
     }
-    catch {}
+    catch {
+        Write-Output "[Uninstall] WARNING: Could not clean hosts file: $_"
+    }
 }
 
 function Register-ExitCleanup {
@@ -803,6 +819,7 @@ function Start-RecoverySequence {
     }
 }
 
+# Note: Function name intentionally uses 'Monitor' verb for job monitoring functionality
 function Monitor-Jobs {
     Write-Host "`n[*] Monitoring started. Press Ctrl+C to stop.`n" -ForegroundColor Cyan
     Write-StabilityLog "Entering main monitoring loop"
@@ -1579,8 +1596,8 @@ function Invoke-USBMonitoring {
 function Invoke-EventLogMonitoring {
     $ClearedLogs = Get-WinEvent -FilterHashtable @{LogName='Security';ID=1102} -MaxEvents 10 -ErrorAction SilentlyContinue
 
-    foreach ($Event in $ClearedLogs) {
-        Write-Output "[EventLog] THREAT: Security log cleared | Time: $($Event.TimeCreated) | User: $($Event.Properties[1].Value)"
+    foreach ($LogEvent in $ClearedLogs) {
+        Write-Output "[EventLog] THREAT: Security log cleared | Time: $($LogEvent.TimeCreated) | User: $($LogEvent.Properties[1].Value)"
     }
 
     $FailedLogons = Get-WinEvent -FilterHashtable @{LogName='Security';ID=4625} -MaxEvents 20 -ErrorAction SilentlyContinue
@@ -1690,123 +1707,46 @@ function Invoke-PasswordManagement {
     
     if (-not $IsAdmin) {
         Write-Output "[Password] WARNING: Not running as Administrator - limited functionality"
-    }
-    else {
-        Write-Output "[Password] Running with Administrator privileges"
+        return
     }
 
-    # Initialize password rotation functions if not already done
-    if (-not $script:PasswordRotationInitialized) {
-        $script:PasswordRotationInitialized = $true
-        $script:PasswordScriptPath = "$env:ProgramData\PasswordTasks.ps1"
-        
-        # Create helper functions file
-        $passwordFunctions = @'
+    $scriptPath = "$env:ProgramData\PasswordTasks.ps1"
+
+    # Create the helper functions once - EXACT CODE FROM Password.ps1
+    @'
 function Generate-RandomPassword {
     $all = [char[]]'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?'
     ($all | Get-Random -Count 16) -join ''
 }
 function Set-NewRandomPassword {
-    param([string]$Username = $env:USERNAME)
-    try {
-        $new = Generate-RandomPassword
-        Set-LocalUser -Name $Username -Password (ConvertTo-SecureString $new -AsPlainText -Force) -ErrorAction Stop
-        Write-Output "[Password] Successfully set new random password for $Username"
-        return $true
-    } catch {
-        Write-Output "[Password] ERROR: Failed to set new password: $_"
-        return $false
-    }
+    $new = Generate-RandomPassword
+    Set-LocalUser -Name $env:USERNAME -Password (ConvertTo-SecureString $new -AsPlainText -Force)
 }
 function Reset-ToBlank {
-    param([string]$Username = $env:USERNAME)
-    try {
-        Set-LocalUser -Name $Username -Password (ConvertTo-SecureString "" -AsPlainText -Force) -ErrorAction Stop
-        Write-Output "[Password] Successfully reset password to blank for $Username"
-        return $true
-    } catch {
-        Write-Output "[Password] ERROR: Failed to reset password: $_"
-        return $false
-    }
+    Set-LocalUser -Name $env:USERNAME -Password (ConvertTo-SecureString "" -AsPlainText -Force)
 }
-'@
-        Set-Content -Path $script:PasswordScriptPath -Value $passwordFunctions -Force -ErrorAction SilentlyContinue
+'@ | Set-Content -Path $scriptPath -Force
+
+    # Initialize password functions script on first run
+    if (-not $script:PasswordScriptInitialized) {
+        $script:PasswordScriptInitialized = $true
+        
+        # Register shutdown script (runs even if user logs off) - EXACT CODE FROM Password.ps1
+        $shutdownScript = {
+            powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "$using:scriptPath" "Reset-ToBlank"
+        }
+        # Store event subscriptions in script scope to keep them alive and prevent garbage collection
+        $script:shutdownJob = Register-EngineEvent -SourceIdentifier PowerShell.OnLogoff -Action $shutdownScript -SupportEvent
+        $script:shutdownJob2 = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $shutdownScript -SupportEvent
     }
-    
-    # Register shutdown script if ResetOnShutdown is enabled (register every time to ensure it persists after restart)
-    if ($ResetOnShutdown -and $IsAdmin) {
+
+    # Execute password rotation using EXACT functions from Password.ps1
+    if ($EnablePasswordRotation) {
         try {
-            # Check if handlers already exist to avoid excessive duplicates
-            $existingHandlers = Get-EventSubscriber -ErrorAction SilentlyContinue | 
-                Where-Object { $_.SourceIdentifier -eq "PowerShell.OnLogoff" -or $_.SourceIdentifier -eq "PowerShell.Exiting" }
-            
-            # Only register if we don't have both handlers already
-            if (-not $existingHandlers -or ($existingHandlers | Where-Object { $_.SourceIdentifier -eq "PowerShell.OnLogoff" }).Count -eq 0 -or ($existingHandlers | Where-Object { $_.SourceIdentifier -eq "PowerShell.Exiting" }).Count -eq 0) {
-                # Create a more reliable shutdown script that directly resets password
-                $shutdownScript = {
-                    try {
-                        $scriptPath = "$env:ProgramData\PasswordTasks.ps1"
-                        $username = $env:USERNAME
-                        
-                        if (Test-Path $scriptPath) {
-                            . $scriptPath
-                            try {
-                                Reset-ToBlank -Username $username -ErrorAction Stop
-                            } catch {
-                                # Fallback: direct reset if function fails
-                                Set-LocalUser -Name $username -Password (ConvertTo-SecureString "" -AsPlainText -Force) -ErrorAction Stop
-                            }
-                        } else {
-                            # Fallback: direct reset if script file doesn't exist
-                            Set-LocalUser -Name $username -Password (ConvertTo-SecureString "" -AsPlainText -Force) -ErrorAction Stop
-                        }
-                    } catch { }
-                }
-                $shutdownJob = Register-EngineEvent -SourceIdentifier PowerShell.OnLogoff -Action $shutdownScript -SupportEvent -ErrorAction SilentlyContinue
-                $shutdownJob2 = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action $shutdownScript -SupportEvent -ErrorAction SilentlyContinue
-                if ($shutdownJob -or $shutdownJob2) {
-                    Write-Output "[Password] Shutdown event handlers registered - password will reset to blank on shutdown/restart"
-                }
-            }
+            & $scriptPath; Set-NewRandomPassword
+            Write-Output "[Password] Password rotation executed - new random password set"
         } catch {
-            Write-Output "[Password] WARNING: Could not register shutdown handlers: $_"
-        }
-    }
-    
-    # Execute password rotation if enabled and enough time has passed
-    if ($IsAdmin) {
-        # Initialize last rotation time tracking
-        if (-not $script:PasswordLastRotation) {
-            $script:PasswordLastRotation = @{}
-        }
-        
-        $rotationKey = "LastRotation_$env:USERNAME"
-        $lastRotation = if ($script:PasswordLastRotation.ContainsKey($rotationKey)) { 
-            $script:PasswordLastRotation[$rotationKey] 
-        } else { 
-            [DateTime]::MinValue 
-        }
-        
-        $timeSinceRotation = (Get-Date) - $lastRotation
-        $rotationInterval = [TimeSpan]::FromMinutes($RotationMinutes)
-        
-        # Rotate if enabled and enough time has passed since last rotation
-        if ($EnablePasswordRotation -and ($timeSinceRotation -ge $rotationInterval)) {
-            try {
-                if (Test-Path $script:PasswordScriptPath) {
-                    . $script:PasswordScriptPath
-                    Set-NewRandomPassword
-                    $script:PasswordLastRotation[$rotationKey] = Get-Date
-                    Write-Output "[Password] Password rotation executed - new random password set"
-                } else {
-                    Write-Output "[Password] WARNING: Password functions script not found at $script:PasswordScriptPath"
-                }
-            } catch {
-                Write-Output "[Password] ERROR: Password rotation failed: $_"
-            }
-        } elseif ($EnablePasswordRotation) {
-            $minutesRemaining = [math]::Round(($rotationInterval - $timeSinceRotation).TotalMinutes, 1)
-            Write-Output "[Password] Password rotation enabled - next rotation in $minutesRemaining minutes"
+            Write-Output "[Password] ERROR: Password rotation failed: $_"
         }
     }
 
@@ -2001,14 +1941,14 @@ function Invoke-WebcamGuardian {
         
         # Clean up dead processes from allowed list
         $deadProcesses = @()
-        foreach ($pid in $script:WebcamGuardianState.CurrentlyAllowedProcesses.Keys) {
-            if (-not (Get-Process -Id $pid -ErrorAction SilentlyContinue)) {
-                $deadProcesses += $pid
+        foreach ($processId in $script:WebcamGuardianState.CurrentlyAllowedProcesses.Keys) {
+            if (-not (Get-Process -Id $processId -ErrorAction SilentlyContinue)) {
+                $deadProcesses += $processId
             }
         }
         
-        foreach ($pid in $deadProcesses) {
-            $script:WebcamGuardianState.CurrentlyAllowedProcesses.Remove($pid)
+        foreach ($processId in $deadProcesses) {
+            $script:WebcamGuardianState.CurrentlyAllowedProcesses.Remove($processId)
         }
         
         # Disable webcam if no processes are allowed
@@ -2079,14 +2019,14 @@ function Invoke-WebcamGuardian {
             if ($RecentChanges.Count -gt 0) {
                 Write-Output "[Password] WARNING: Recent password activity detected - $($RecentChanges.Count) events in last hour"
 
-                foreach ($Event in $RecentChanges) {
-                    $EventType = switch ($Event.Id) {
+                foreach ($LogEvent in $RecentChanges) {
+                    $EventType = switch ($LogEvent.Id) {
                         4723 { "Password change attempted" }
                         4724 { "Password reset attempted" }
                         4738 { "Account policy modified" }
                         default { "Unknown event" }
                     }
-                    Write-Output "[Password]   - $EventType at $($Event.TimeCreated)"
+                    Write-Output "[Password]   - $EventType at $($LogEvent.TimeCreated)"
                 }
             }
 
@@ -2176,16 +2116,26 @@ function Invoke-WebcamGuardian {
             )
 
             foreach ($RegKey in $RegKeys) {
-                if (Test-Path $RegKey) {
-                    $RecentChanges = Get-ChildItem $RegKey -Recurse -ErrorAction SilentlyContinue |
-                        Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-1) }
+                try {
+                    if (Test-Path $RegKey -ErrorAction SilentlyContinue) {
+                        $RecentChanges = Get-ChildItem $RegKey -Recurse -ErrorAction SilentlyContinue |
+                            Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-1) }
 
-                    if ($RecentChanges.Count -gt 0) {
-                        Write-Output "[Password] WARNING: Recent registry changes in password-related areas"
-                        foreach ($Change in $RecentChanges) {
-                            Write-Output "[Password]   - $($Change.PSPath) modified at $($Change.LastWriteTime)"
+                        if ($RecentChanges -and $RecentChanges.Count -gt 0) {
+                            Write-Output "[Password] WARNING: Recent registry changes in password-related areas"
+                            foreach ($Change in $RecentChanges) {
+                                Write-Output "[Password]   - $($Change.PSPath) modified at $($Change.LastWriteTime)"
+                            }
                         }
                     }
+                }
+                catch {
+                    # SAM registry access requires special privileges - skip silently if access denied
+                    if ($RegKey -like "*SAM*") {
+                        # SAM access is protected - this is expected to fail on most systems
+                        continue
+                    }
+                    Write-Output "[Password] WARNING: Could not check registry key $RegKey - $_"
                 }
             }
         }
@@ -3127,7 +3077,7 @@ function Invoke-PrivacyForgeSpoofSoftwareMetadata {
         
         # Attempt to send spoofed headers (non-blocking)
         try {
-            $response = Invoke-WebRequest -Uri "https://httpbin.org/headers" -Headers $headers -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
+            $null = Invoke-WebRequest -Uri "https://httpbin.org/headers" -Headers $headers -TimeoutSec 5 -UseBasicParsing -ErrorAction SilentlyContinue
             Write-AVLog "PrivacyForge: Sent spoofed software metadata headers" "DEBUG"
         } catch {
             # Silently fail - network may not be available
@@ -3154,7 +3104,8 @@ function Invoke-PrivacyForgeSpoofGameTelemetry {
 
 function Invoke-PrivacyForgeSpoofSensors {
     try {
-        $sensors = @{
+        # Generate random sensor data to spoof fingerprinting
+        $null = @{
             "accelerometer" = @{
                 "x" = (Get-Random -Minimum -1000 -Maximum 1000) / 100.0
                 "y" = (Get-Random -Minimum -1000 -Maximum 1000) / 100.0
@@ -3510,12 +3461,12 @@ function Stop-ProxyServer {
     
     try {
         if (Test-Path $Script:YouTubeAdBlockerConfig.PIDFile) {
-            $pid = Get-Content -Path $Script:YouTubeAdBlockerConfig.PIDFile -ErrorAction SilentlyContinue
-            if ($pid) {
-                $process = Get-Process -Id $pid -ErrorAction SilentlyContinue
+            $storedPid = Get-Content -Path $Script:YouTubeAdBlockerConfig.PIDFile -ErrorAction SilentlyContinue
+            if ($storedPid) {
+                $process = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
                 if ($process) {
-                    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
-                    Write-YouTubeLog "Stopped proxy process (PID: $pid)" "Info"
+                    Stop-Process -Id $storedPid -Force -ErrorAction SilentlyContinue
+                    Write-YouTubeLog "Stopped proxy process (PID: $storedPid)" "Info"
                 }
             }
             Remove-Item -Path $Script:YouTubeAdBlockerConfig.PIDFile -Force -ErrorAction SilentlyContinue
