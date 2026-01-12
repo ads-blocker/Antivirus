@@ -44,7 +44,6 @@ $Script:ManagedJobConfig = @{
     NamedPipeMonitoringIntervalSeconds = 45
     DNSExfiltrationDetectionIntervalSeconds = 30
     PasswordManagementIntervalSeconds = 120
-    YouTubeAdBlockerIntervalSeconds = 300
     WebcamGuardianIntervalSeconds = 5
     BeaconDetectionIntervalSeconds = 60
     CodeInjectionDetectionIntervalSeconds = 30
@@ -187,84 +186,6 @@ function Write-StabilityLog {
     Write-Host $entry -ForegroundColor $(switch($Level) { "ERROR" {"Red"} "WARN" {"Yellow"} default {"White"} })
 }
 
-function Reset-InternetProxySettings {
-    try {
-        # Stop proxy server if running
-        if (Test-Path $Script:YouTubeAdBlockerConfig.PIDFile) {
-            $storedPid = Get-Content -Path $Script:YouTubeAdBlockerConfig.PIDFile -ErrorAction SilentlyContinue
-            if ($storedPid) {
-                $process = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
-                if ($process) {
-                    Stop-Process -Id $storedPid -Force -ErrorAction SilentlyContinue
-                }
-            }
-            Remove-Item -Path $Script:YouTubeAdBlockerConfig.PIDFile -Force -ErrorAction SilentlyContinue
-        }
-        
-        # Kill any remaining proxy PowerShell processes
-        Get-Process powershell -ErrorAction SilentlyContinue | Where-Object {
-            $_.CommandLine -like "*proxy.ps1*" -or $_.MainWindowTitle -like "*proxy*"
-        } | Stop-Process -Force -ErrorAction SilentlyContinue
-        
-        Get-Job -Name "YouTubeAdBlockerProxy" -ErrorAction SilentlyContinue | Remove-Job -Force -ErrorAction SilentlyContinue
-    }
-    catch {}
-
-    try {
-        $pacFile = "$env:TEMP\youtube-adblocker.pac"
-        if (Test-Path $pacFile) {
-            Remove-Item -Path $pacFile -Force -ErrorAction SilentlyContinue
-        }
-    }
-    catch {}
-    
-    try {
-        # Restore internet settings
-        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-        if (Test-Path $regPath) {
-            Remove-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0 -Type DWord -Force | Out-Null
-            Remove-ItemProperty -Path $regPath -Name "ProxyServer" -ErrorAction SilentlyContinue
-            Remove-ItemProperty -Path $regPath -Name "ProxyOverride" -ErrorAction SilentlyContinue
-        }
-    }
-    catch {}
-
-    try {
-        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-        if (Test-Path $regPath) {
-            Remove-ItemProperty -Path $regPath -Name AutoConfigURL -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $regPath -Name ProxyEnable -Value 0 -ErrorAction SilentlyContinue
-        }
-    }
-    catch {}
-
-    # Remove hosts file entries
-    try {
-        $hostsPath = "C:\Windows\System32\drivers\etc\hosts"
-        if (Test-Path $hostsPath) {
-            # Read content and close file handle properly
-            $hostsContent = @()
-            Get-Content $hostsPath -ErrorAction Stop | ForEach-Object { $hostsContent += $_ }
-            
-            # Filter out ad blocking entries
-            $cleanContent = $hostsContent | Where-Object { 
-                $_ -notmatch "# Ad Blocking" -and 
-                $_ -notmatch "127\.0\.0\.1.*ads?" -and 
-                $_ -notmatch "127\.0\.0\.1.*doubleclick" -and 
-                $_ -notmatch "127\.0\.0\.1.*googleads" 
-            }
-            
-            # Write using file stream to handle locks better
-            $cleanContent | Out-File -FilePath $hostsPath -Encoding ASCII -Force -ErrorAction Stop
-            ipconfig /flushdns | Out-Null
-            Write-Output "[Uninstall] Successfully cleaned hosts file"
-        }
-    }
-    catch {
-        Write-Output "[Uninstall] WARNING: Could not clean hosts file: $_"
-    }
-}
 
 function Register-ExitCleanup {
     if ($script:ExitCleanupRegistered) {
@@ -273,7 +194,7 @@ function Register-ExitCleanup {
 
     try {
         Register-EngineEvent -SourceIdentifier "AntivirusProtection_ExitCleanup" -EventName PowerShell.Exiting -Action {
-            try { Reset-InternetProxySettings } catch {}
+            # Cleanup actions if needed
         } | Out-Null
         $script:ExitCleanupRegistered = $true
     }
@@ -379,10 +300,6 @@ function Uninstall-Antivirus {
     Write-Host "`n=== Uninstalling Antivirus ===`n" -ForegroundColor Cyan
     Write-StabilityLog "Starting uninstall process"
 
-    try {
-        Reset-InternetProxySettings
-    }
-    catch {}
 
     try {
         if ($script:ManagedJobs) {
@@ -900,10 +817,6 @@ function Start-RecoverySequence {
     Write-StabilityLog "Starting recovery sequence" "WARN"
 
     try {
-        try {
-            Reset-InternetProxySettings
-        }
-        catch {}
 
         if ($script:ManagedJobs) {
             foreach ($k in @($script:ManagedJobs.Keys)) {
@@ -1480,7 +1393,7 @@ function Invoke-AMSIBypassDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\AMSIBypass_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\AMSIBypass_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -1693,7 +1606,7 @@ function Invoke-RegistryPersistenceDetection {
                 $Global:AntivirusState.ThreatCount++
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\RegistryPersistence_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\RegistryPersistence_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -1831,7 +1744,7 @@ function Invoke-DLLHijackingDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\DLLHijacking_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\DLLHijacking_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -1999,7 +1912,7 @@ function Invoke-ProcessHollowingDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\ProcessHollowing_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\ProcessHollowing_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -2147,7 +2060,7 @@ function Invoke-KeyloggerDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\Keylogger_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\Keylogger_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -2330,7 +2243,7 @@ function Invoke-RansomwareDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\Ransomware_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\Ransomware_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -3179,7 +3092,7 @@ function Invoke-BrowserExtensionMonitoring {
                 $Global:AntivirusState.ThreatCount++
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\BrowserExtension_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\BrowserExtension_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -3328,7 +3241,7 @@ function Invoke-USBMonitoring {
                 $Global:AntivirusState.ThreatCount++
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\USBMonitoring_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\USBMonitoring_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -5475,7 +5388,7 @@ function Invoke-BeaconDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\BeaconDetection_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\BeaconDetection_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -5657,7 +5570,7 @@ function Invoke-CodeInjectionDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\CodeInjection_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\CodeInjection_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -5869,7 +5782,7 @@ function Invoke-ElfCatcher {
         }
         
         if ($detections.Count -gt 0) {
-            $logPath = "$env:ProgramData\Antivirus\Logs\ElfCatcher_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\ElfCatcher_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -6002,7 +5915,7 @@ function Invoke-FileEntropyDetection {
         }
         
         if ($detections.Count -gt 0) {
-            $logPath = "$env:ProgramData\Antivirus\Logs\FileEntropy_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\FileEntropy_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -6280,7 +6193,7 @@ function Invoke-ProcessCreationDetection {
                 }
             }
             
-            $logPath = "$env:ProgramData\Antivirus\Logs\ProcessCreation_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\ProcessCreation_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
                 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -6759,426 +6672,6 @@ function Invoke-PrivacyForgeSpoofClipboard {
 
 #endregion
 
-function Set-HostsFileBlock {
-    param(
-        [string[]]$Domains,
-        [string]$RedirectIP = "127.0.0.1"
-    )
-    
-    try {
-        $hostsPath = "C:\Windows\System32\drivers\etc\hosts"
-        $hostsContent = Get-Content $hostsPath -ErrorAction SilentlyContinue
-        
-        # Check if ad blocking section already exists
-        if ($hostsContent -match "# Ad Blocking") {
-            Write-Host "Hosts file already contains ad blocking entries"
-            return
-        }
-        
-        # Add ad blocking entries
-        $adEntries = @(
-            "",
-            "# Ad Blocking - Redirect ad domains to localhost",
-            "$RedirectIP`tpagead2.googlesyndication.com",
-            "$RedirectIP`tgooglesyndication.com",
-            "$RedirectIP`tgoogleadservices.com",
-            "$RedirectIP`tads.google.com",
-            "$RedirectIP`tdoubleclick.net",
-            "$RedirectIP`twww.googleadservices.com",
-            "$RedirectIP`twww.googlesyndication.com",
-            "$RedirectIP`tgoogle-analytics.com",
-            "$RedirectIP`tssl.google-analytics.com",
-            "$RedirectIP`twww.google-analytics.com",
-            "$RedirectIP`tfacebook.com/tr",
-            "$RedirectIP`tconnect.facebook.net",
-            "$RedirectIP`tads.facebook.com",
-            "$RedirectIP`tamazon-adsystem.com",
-            "$RedirectIP`tads.yahoo.com",
-            "$RedirectIP`tadvertising.amazon.com",
-            "$RedirectIP`ttaboola.com",
-            "$RedirectIP`toutbrain.com",
-            "$RedirectIP`tscorecardresearch.com",
-            "$RedirectIP`tquantserve.com",
-            "$RedirectIP`tads-twitter.com",
-            "$RedirectIP`tanalytics.twitter.com",
-            "$RedirectIP`tads.linkedin.com",
-            "$RedirectIP`tanalytics.linkedin.com",
-            "$RedirectIP`tads.reddit.com",
-            "$RedirectIP`tads.tiktok.com",
-            "$RedirectIP`tanalytics.tiktok.com"
-        )
-        
-        Add-Content $hostsPath $adEntries -Encoding UTF8
-        ipconfig /flushdns | Out-Null
-        Write-Host "Added ad blocking entries to hosts file"
-        
-    } catch {
-        Write-Host "Error updating hosts file: $($_.Exception.Message)"
-    }
-}
-
-#region === YouTube Ad Blocker Configuration ===
-
-$Script:YouTubeAdBlockerConfig = @{
-    ProxyPort = 8080
-    ProxyHost = "127.0.0.1"
-    PACUrl = "https://raw.githubusercontent.com/ads-blocker/Pac/refs/heads/main/BlockAds.pac"
-    LogFile = "$env:ProgramData\YouTubeAdBlocker\proxy.log"
-    PIDFile = "$env:ProgramData\YouTubeAdBlocker\proxy.pid"
-    ServiceName = "YouTubeAdBlockerProxy"
-    InstallDir = "$env:ProgramData\YouTubeAdBlocker"
-}
-
-# JavaScript to inject
-$Script:AdSkipScript = @"
-(function() {
-    'use strict';
-    console.log('[AdBlocker] Script injected');
-    function skipAds() {
-        try {
-            var skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-ad-skip-button-modern, .videoAdUiSkipButton, button[class*='skip']');
-            if (skipBtn && skipBtn.offsetParent !== null) {
-                skipBtn.click();
-                console.log('[AdBlocker] Skipped ad');
-            }
-            var overlays = document.querySelectorAll('.ytp-ad-overlay-container, .ytp-ad-text, .ad-showing, .ad-interrupting');
-            overlays.forEach(function(o) { o.style.display = 'none'; o.remove(); });
-            var iframes = document.querySelectorAll('iframe[src*='doubleclick'], iframe[src*='googlesyndication']');
-            iframes.forEach(function(i) { if (i.src) { i.src = 'about:blank'; i.style.display = 'none'; } });
-            var player = document.getElementById('movie_player');
-            if (player) {
-                var video = player.querySelector('video');
-                if (video && video.duration > 0 && video.duration < 5) {
-                    video.currentTime = video.duration;
-                }
-            }
-        } catch(e) {}
-    }
-    skipAds();
-    setInterval(skipAds, 250);
-    var obs = new MutationObserver(skipAds);
-    var container = document.getElementById('movie_player') || document.body;
-    if (container) {
-        obs.observe(container, {childList: true, subtree: true, attributes: true});
-    }
-})();
-"@
-
-#endregion
-
-#region === YouTube Ad Blocker Functions ===
-
-function Write-YouTubeLog {
-    param([string]$Message, [string]$Level = "Info")
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logEntry = "[$timestamp] [$Level] $Message"
-    $logDir = Split-Path -Path $Script:YouTubeAdBlockerConfig.LogFile -Parent
-    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
-    Add-Content -Path $Script:YouTubeAdBlockerConfig.LogFile -Value $logEntry -ErrorAction SilentlyContinue
-    $color = if ($Level -eq "Error") { "Red" } elseif ($Level -eq "Success") { "Green" } elseif ($Level -eq "Warning") { "Yellow" } else { "White" }
-    Write-Host $logEntry -ForegroundColor $color
-}
-
-function Test-InternetConnectivity {
-    Write-YouTubeLog "Testing internet connectivity..." "Info"
-    try {
-        $test = Test-NetConnection -ComputerName "8.8.8.8" -Port 53 -InformationLevel Quiet -WarningAction SilentlyContinue
-        if (-not $test) {
-            $test = Test-NetConnection -ComputerName "1.1.1.1" -Port 53 -InformationLevel Quiet -WarningAction SilentlyContinue
-        }
-        return $test
-    } catch {
-        return $false
-    }
-}
-
-function Restore-InternetSettings {
-    Write-YouTubeLog "Restoring internet settings for safety..." "Warning"
-    try {
-        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-        Remove-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue
-        Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0 -Type DWord -Force | Out-Null
-        Remove-ItemProperty -Path $regPath -Name "ProxyServer" -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $regPath -Name "ProxyOverride" -ErrorAction SilentlyContinue
-        
-        $signature = @'
-[DllImport("wininet.dll", SetLastError = true, CharSet=CharSet.Auto)]
-public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
-'@
-        $type = Add-Type -MemberDefinition $signature -Name WinInet -Namespace NetTools -PassThru -ErrorAction SilentlyContinue
-        if ($type) {
-            $type::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
-            $type::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
-        }
-        Write-YouTubeLog "Internet settings restored" "Success"
-        return $true
-    } catch {
-        Write-YouTubeLog "Failed to restore settings: $_" "Error"
-        return $false
-    }
-}
-
-function Start-ProxyServer {
-    Write-YouTubeLog "Starting local proxy server..." "Info"
-    
-    try {
-        # Check if already running
-        if (Test-Path $Script:YouTubeAdBlockerConfig.PIDFile) {
-            $oldPID = Get-Content -Path $Script:YouTubeAdBlockerConfig.PIDFile -ErrorAction SilentlyContinue
-            if ($oldPID) {
-                $proc = Get-Process -Id $oldPID -ErrorAction SilentlyContinue
-                if ($proc) {
-                    Write-YouTubeLog "Proxy already running (PID: $oldPID)" "Info"
-                    return $true
-                }
-            }
-        }
-        
-        # Create proxy PowerShell script file
-        $proxyScriptPath = "$($Script:YouTubeAdBlockerConfig.InstallDir)\proxy.ps1"
-        $proxyScriptContent = @"
-`$ErrorActionPreference = 'SilentlyContinue'
-[System.Net.ServicePointManager]::ServerCertificateValidationCallback = {`$true}
-
-`$listener = New-Object System.Net.HttpListener
-`$listener.Prefixes.Add("http://127.0.0.1:$($Script:YouTubeAdBlockerConfig.ProxyPort)/")
-`$listener.Start()
-
-"Proxy started" | Out-File -FilePath "$($Script:YouTubeAdBlockerConfig.LogFile)" -Append
-
-while (`$listener.IsListening) {
-    try {
-        `$context = `$listener.GetContextAsync()
-        `$task = `$context.GetAwaiter()
-        while (-not `$task.IsCompleted) {
-            Start-Sleep -Milliseconds 100
-            if (-not `$listener.IsListening) { break }
-        }
-        if (-not `$listener.IsListening) { break }
-        `$ctx = `$task.GetResult()
-        `$request = `$ctx.Request
-        `$response = `$ctx.Response
-        
-        `$url = `$request.Url.ToString()
-        
-        # Handle CONNECT (HTTPS tunneling)
-        if (`$request.HttpMethod -eq 'CONNECT') {
-            `$response.StatusCode = 200
-            `$response.Close()
-            continue
-        }
-        
-        # For YouTube, inject JavaScript
-        if (`$url -match 'youtube\.com') {
-            try {
-                `$webRequest = [System.Net.HttpWebRequest]::Create(`$url)
-                `$webRequest.Method = `$request.HttpMethod
-                `$webRequest.Proxy = `$null
-                `$webRequest.Timeout = 10000
-                
-                `$webResponse = `$webRequest.GetResponse()
-                `$stream = `$webResponse.GetResponseStream()
-                `$reader = New-Object System.IO.StreamReader(`$stream)
-                `$content = `$reader.ReadToEnd()
-                `$reader.Close()
-                `$stream.Close()
-                
-                if (`$content -match '<html') {
-                    `$script = '<script>(function(){var s=function(){try{var b=document.querySelector(".ytp-ad-skip-button");if(b&&b.offsetParent){b.click();}var o=document.querySelectorAll(".ytp-ad-overlay-container");o.forEach(function(e){e.style.display="none";});}catch(e){}};s();setInterval(s,250);})();</script>'
-                    `$content = `$content -replace '</body>', (`$script + '</body>')
-                }
-                
-                `$bytes = [System.Text.Encoding]::UTF8.GetBytes(`$content)
-                `$response.ContentLength64 = `$bytes.Length
-                `$response.ContentType = `$webResponse.ContentType
-                `$response.StatusCode = 200
-                `$response.OutputStream.Write(`$bytes, 0, `$bytes.Length)
-                `$webResponse.Close()
-            } catch {
-                `$response.StatusCode = 500
-            }
-        } else {
-            # Forward non-YouTube directly
-            try {
-                `$webRequest = [System.Net.HttpWebRequest]::Create(`$url)
-                `$webRequest.Method = `$request.HttpMethod
-                `$webRequest.Proxy = `$null
-                `$webRequest.Timeout = 10000
-                `$webResponse = `$webRequest.GetResponse()
-                `$stream = `$webResponse.GetResponseStream()
-                `$response.ContentType = `$webResponse.ContentType
-                `$response.StatusCode = 200
-                `$stream.CopyTo(`$response.OutputStream)
-                `$stream.Close()
-                `$webResponse.Close()
-            } catch {
-                `$response.StatusCode = 500
-            }
-        }
-        `$response.Close()
-    } catch {
-        # Continue on error
-    }
-}
-"@
-        
-        Set-Content -Path $proxyScriptPath -Value $proxyScriptContent -Encoding UTF8 -Force
-        
-        # Start proxy in new PowerShell window (hidden)
-        $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = "powershell.exe"
-        $psi.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$proxyScriptPath`""
-        $psi.CreateNoWindow = $true
-        $psi.UseShellExecute = $false
-        $process = [System.Diagnostics.Process]::Start($psi)
-        
-        Start-Sleep -Seconds 3
-        
-        # Verify proxy is running
-        try {
-            $testRequest = [System.Net.HttpWebRequest]::Create("http://127.0.0.1:$($Script:YouTubeAdBlockerConfig.ProxyPort)/")
-            $testRequest.Timeout = 2000
-            $testRequest.Method = "GET"
-            try {
-                $testResponse = $testRequest.GetResponse()
-                $testResponse.Close()
-            } catch {
-                # Proxy might not respond to root, but that's OK
-            }
-        } catch {}
-        
-        # Save PID
-        $process.Id | Out-File -FilePath $Script:YouTubeAdBlockerConfig.PIDFile -Force
-        
-        Write-YouTubeLog "Proxy server started (PID: $($process.Id))" "Success"
-        return $true
-        
-    } catch {
-        Write-YouTubeLog "Failed to start proxy: $_" "Error"
-        return $false
-    }
-}
-
-function Stop-ProxyServer {
-    Write-YouTubeLog "Stopping proxy server..." "Info"
-    
-    try {
-        if (Test-Path $Script:YouTubeAdBlockerConfig.PIDFile) {
-            $storedPid = Get-Content -Path $Script:YouTubeAdBlockerConfig.PIDFile -ErrorAction SilentlyContinue
-            if ($storedPid) {
-                $process = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
-                if ($process) {
-                    Stop-Process -Id $storedPid -Force -ErrorAction SilentlyContinue
-                    Write-YouTubeLog "Stopped proxy process (PID: $storedPid)" "Info"
-                }
-            }
-            Remove-Item -Path $Script:YouTubeAdBlockerConfig.PIDFile -Force -ErrorAction SilentlyContinue
-        }
-        
-        # Kill any remaining proxy PowerShell processes
-        Get-Process powershell -ErrorAction SilentlyContinue | Where-Object {
-            $_.CommandLine -like "*proxy.ps1*" -or $_.MainWindowTitle -like "*proxy*"
-        } | Stop-Process -Force -ErrorAction SilentlyContinue
-        
-        Write-YouTubeLog "Proxy server stopped" "Success"
-        return $true
-    } catch {
-        Write-YouTubeLog "Error stopping proxy: $_" "Error"
-        return $false
-    }
-}
-
-function Set-PACConfiguration {
-    param([string]$ProxyHost, [int]$ProxyPort, [string]$GitHubPACUrl)
-    
-    Write-YouTubeLog "Configuring registry to use GitHub PAC URL..." "Info"
-    
-    try {
-        $regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-        
-        # Set GitHub PAC URL directly in registry
-        Set-ItemProperty -Path $regPath -Name "AutoConfigURL" -Value $GitHubPACUrl -Type String -Force | Out-Null
-        Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 1 -Type DWord -Force | Out-Null
-        Set-ItemProperty -Path $regPath -Name "ProxyOverride" -Value "localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;192.168.*;<local>" -Type String -Force | Out-Null
-        
-        Write-YouTubeLog "Registry configured with GitHub PAC URL: $GitHubPACUrl" "Success"
-        
-        # Notify system
-        $signature = @'
-[DllImport("wininet.dll", SetLastError = true, CharSet=CharSet.Auto)]
-public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);
-'@
-        $type = Add-Type -MemberDefinition $signature -Name WinInet -Namespace NetTools -PassThru -ErrorAction SilentlyContinue
-        if ($type) {
-            $type::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
-            $type::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0) | Out-Null
-        }
-        
-        Write-YouTubeLog "PAC configuration complete" "Success"
-        return $true
-    } catch {
-        Write-YouTubeLog "Failed to configure PAC: $_" "Error"
-        return $false
-    }
-}
-
-function Invoke-YouTubeAdBlocker {
-    <#
-    .SYNOPSIS
-    Main function for YouTube ad blocking via local proxy server
-    #>
-    
-    try {
-        Write-YouTubeLog "=== Installing YouTube Ad Blocker ===" "Info"
-        
-        # Test internet before changes
-        if (-not (Test-InternetConnectivity)) {
-            Write-YouTubeLog "WARNING: No internet connectivity detected. Proceeding anyway..." "Warning"
-        }
-        
-        # Create install directory (for proxy files only)
-        if (-not (Test-Path $Script:YouTubeAdBlockerConfig.InstallDir)) {
-            New-Item -ItemType Directory -Path $Script:YouTubeAdBlockerConfig.InstallDir -Force | Out-Null
-        }
-        
-        # Start proxy server
-        if (-not (Start-ProxyServer)) {
-            Write-YouTubeLog "Failed to start proxy. Restoring settings..." "Error"
-            Restore-InternetSettings
-            return
-        }
-        
-        # Wait a moment for proxy to be ready
-        Start-Sleep -Seconds 2
-        
-        # Configure PAC registry key with GitHub PAC URL (no download)
-        if (-not (Set-PACConfiguration -ProxyHost $Script:YouTubeAdBlockerConfig.ProxyHost -ProxyPort $Script:YouTubeAdBlockerConfig.ProxyPort -GitHubPACUrl $Script:YouTubeAdBlockerConfig.PACUrl)) {
-            Write-YouTubeLog "Failed to configure PAC. Stopping proxy and restoring..." "Error"
-            Stop-ProxyServer
-            Restore-InternetSettings
-            return
-        }
-        
-        # Test internet after changes
-        Start-Sleep -Seconds 2
-        if (-not (Test-InternetConnectivity)) {
-            Write-YouTubeLog "WARNING: Internet connectivity test failed after installation!" "Warning"
-            Write-YouTubeLog "Restoring settings for safety..." "Warning"
-            Restore-InternetSettings
-            Stop-ProxyServer
-            return
-        }
-        
-        Write-YouTubeLog "=== Installation Complete ===" "Success"
-        Write-YouTubeLog "Restart your browser for changes to take effect" "Info"
-        
-    } catch {
-        Write-YouTubeLog "Error: $($_.Exception.Message)" "Error"
-    }
-}
-
-#endregion
-
 # ===================== Main =====================
 
 try {
@@ -7279,7 +6772,6 @@ Write-Host "[PROTECTION] Anti-termination safeguards active" -ForegroundColor Gr
         "NamedPipeMonitoring",
         "DNSExfiltrationDetection",
         "PasswordManagement",
-        "YouTubeAdBlocker",
         "WebcamGuardian",
         "BeaconDetection",
         "CodeInjectionDetection",
