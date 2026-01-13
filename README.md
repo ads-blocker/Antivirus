@@ -1,17 +1,15 @@
-# 🛡️ Modular Antivirus & EDR Solution
+# 🛡️ Modular Antivirus & EDR System
 
 <div align="center">
 
-**Enterprise-grade endpoint protection without the enterprise price tag**
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-blue.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+![Status](https://img.shields.io/badge/Status-Active-success.svg)
 
-[![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-blue.svg)](https://docs.microsoft.com/powershell)
-[![Windows](https://img.shields.io/badge/Windows-10%2F11%2BServer-0078D6.svg)](https://www.microsoft.com/windows)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Active-success.svg)](https://github.com/ads-blocker/Antivirus)
+**A comprehensive, single-file PowerShell-based Antivirus and Endpoint Detection & Response (EDR) solution with 48+ detection modules**
 
-*A comprehensive Windows security suite written entirely in PowerShell*
-
-[Features](#-features) • [Installation](#-installation) • [Configuration](#-configuration) • [Detection Modules](#-detection-modules) • [Documentation](#-documentation)
+[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Modules](#-detection-modules) • [Configuration](#-configuration)
 
 </div>
 
@@ -20,18 +18,16 @@
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
-- [Key Features](#-key-features)
+- [Features](#-features)
+- [Requirements](#-requirements)
 - [Installation](#-installation)
-- [Quick Start](#-quick-start)
+- [Usage](#-usage)
 - [Detection Modules](#-detection-modules)
 - [Configuration](#-configuration)
-- [Advanced Features](#-advanced-features)
-- [Architecture](#-architecture)
-- [Threat Intelligence](#-threat-intelligence)
-- [Logging & Monitoring](#-logging--monitoring)
-- [Performance](#-performance)
+- [API Integration](#-api-integration)
+- [Security Features](#-security-features)
+- [Logging](#-logging)
 - [Troubleshooting](#-troubleshooting)
-- [Security Considerations](#-security-considerations)
 - [Contributing](#-contributing)
 - [License](#-license)
 
@@ -39,636 +35,515 @@
 
 ## 🎯 Overview
 
-**Modular Antivirus & EDR** is a single-file, enterprise-grade endpoint detection and response solution written entirely in PowerShell. It provides real-time threat detection, behavioral analysis, and automated response capabilities typically found only in commercial security products.
+This is a comprehensive, enterprise-grade antivirus and EDR solution written entirely in PowerShell. It provides real-time threat detection, automatic response actions, and extensive monitoring capabilities across 48+ detection modules. The system is designed as a single-file solution for easy deployment and management.
 
-### Why This Solution?
+### Key Highlights
 
-- ✅ **Zero Dependencies** - Single PowerShell script, no installers or external tools
-- ✅ **40+ Detection Modules** - Comprehensive coverage across all attack vectors
-- ✅ **Real-time Monitoring** - Continuous behavioral analysis with configurable intervals
-- ✅ **Automated Response** - Auto-quarantine, process termination, and network blocking
-- ✅ **Self-Protection** - Anti-termination, watchdog, and auto-restart capabilities
-- ✅ **Privacy Features** - Webcam guardian, clipboard monitoring, and identity spoofing
-- ✅ **Low Resource Usage** - Configurable memory limits (default 500MB max)
-
----
-
-## ✨ Key Features
-
-### 🔍 Threat Detection
-
-| Category | Capabilities |
-|----------|-------------|
-| **Process & Memory** | Process hollowing, code injection, reflective DLL injection, memory scanning, fileless malware |
-| **Network Security** | C2 beacon detection, DNS exfiltration, network anomalies, suspicious ports, lateral movement |
-| **Persistence** | Registry monitoring, scheduled tasks, WMI subscriptions, service installation, COM hijacking |
-| **Credentials** | LSASS access monitoring, credential dumping tools, AMSI bypass, password security, SAM/SECURITY hive alerts |
-| **Mobile Devices** | iPhone/Android monitoring, banking trojan detection, ADB connection monitoring, mobile malware signatures |
-| **Attack Tools** | Dark web tool detection (Hydra, Mimikatz, Metasploit, etc.), hash-based detection, behavioral analysis |
-
-### 🛡️ Advanced Detection Framework
-
-**Multi-layered detection resistant to renaming and obfuscation:**
-
-- 🔐 **Hash-Based Detection** - SHA256 hash matching for known threats
-- 📝 **Signature Matching** - YARA-like pattern detection in file content
-- 🎲 **Entropy Analysis** - Detects packed/obfuscated malware
-- 🎭 **Behavioral Analysis** - Command-line pattern and API call monitoring
-- ✅ **Digital Signature Verification** - Validates executable authenticity
-
-### 🔒 Privacy Protection
-
-- **Webcam Guardian** - Permission-based webcam access control with auto-disable
-- **Clipboard Monitoring** - Detects sensitive data exposure (API keys, passwords, credit cards)
-- **KeyScrambler** - Anti-keylogger protection using keyboard hook injection
-- **PrivacyForge** - Automatic identity and telemetry spoofing
-
-### 🚨 System Hardening
-
-- **USB Monitoring** - Detects malicious USB devices and autorun threats
-- **Browser Extension Scanning** - Monitors Chrome, Edge, and Firefox for suspicious extensions
-- **Firewall Rule Monitoring** - Tracks unauthorized firewall modifications
-- **Shadow Copy Protection** - Alerts on ransomware-style shadow copy deletion
+- ✅ **48+ Detection Modules** - Comprehensive threat coverage
+- ✅ **Real-time Monitoring** - Continuous system surveillance
+- ✅ **Automatic Response** - Quarantine, kill processes, block network
+- ✅ **API Integration** - MalwareBazaar, CIRCL, Cymru hash lookups
+- ✅ **Zero Configuration** - Works out of the box
+- ✅ **Single File** - Easy deployment and management
+- ✅ **Auto-Persistence** - Scheduled task for automatic startup
+- ✅ **Key Scrambler** - Protection against keyloggers
 
 ---
 
-## 📦 Installation
+## ✨ Features
 
-### Requirements
+### Core Capabilities
 
-- **OS**: Windows 10/11 or Windows Server 2016+
-- **PowerShell**: Version 5.1 or higher
-- **Privileges**: Administrator (recommended for full functionality)
-- **Memory**: Minimum 500MB available RAM
+- **Hash-based Detection** - SHA256 hash matching against threat databases
+- **Behavioral Analysis** - Anomaly detection and pattern matching
+- **Memory Scanning** - In-memory threat detection
+- **Network Monitoring** - Traffic analysis and exfiltration detection
+- **Process Monitoring** - Real-time process anomaly detection
+- **File System Protection** - Real-time file scanning and quarantine
+- **Registry Monitoring** - Persistence mechanism detection
+- **Rootkit Detection** - Advanced kernel-level threat detection
+
+### Advanced Features
+
+- **Fileless Malware Detection** - PowerShell, WMI, and registry-based threats
+- **Ransomware Protection** - Real-time encryption detection
+- **Credential Dumping Prevention** - LSASS and SAM protection
+- **Lateral Movement Detection** - Network-based attack detection
+- **Code Injection Detection** - Process hollowing and DLL injection
+- **USB Device Monitoring** - Removable media threat detection
+- **Webcam Protection** - Unauthorized camera access prevention
+- **Clipboard Monitoring** - Sensitive data exfiltration detection
+
+### Response Capabilities
+
+- **Automatic Quarantine** - Isolate threats automatically
+- **Process Termination** - Kill malicious processes
+- **Network Blocking** - Block malicious network connections
+- **Driver Protection** - Prevent removal of critical system drivers
+- **API Verification** - Cross-reference with external threat intelligence
+
+---
+
+## 📦 Requirements
+
+- **PowerShell 5.1 or higher** (Windows PowerShell or PowerShell Core)
+- **Windows 10/11 or Windows Server 2016+**
+- **Administrator privileges** (required for full functionality)
+- **Internet connection** (optional, for API lookups)
+
+---
+
+## 🚀 Installation
 
 ### Quick Start
 
+1. **Download the script**
+   ```powershell
+   # Clone or download Antivirus.ps1
+   ```
+
+2. **Run with Administrator privileges**
+   ```powershell
+   # Right-click PowerShell and select "Run as Administrator"
+   Set-ExecutionPolicy Bypass -Scope Process -Force
+   .\Antivirus.ps1
+   ```
+
+3. **The script will automatically:**
+   - Create installation directory (`C:\ProgramData\AntivirusProtection`)
+   - Set up scheduled task for auto-start
+   - Initialize all 48 detection modules
+   - Begin monitoring immediately
+
+### Installation Details
+
+The script installs to:
+```
+C:\ProgramData\AntivirusProtection\
+├── Antivirus.ps1          # Main script
+├── Data\                  # Databases and state
+├── Logs\                  # All log files
+├── Quarantine\           # Isolated threats
+└── Reports\              # Detection reports
+```
+
+---
+
+## 💻 Usage
+
+### Starting the Antivirus
+
 ```powershell
-# Download the script
-# Run in Administrator PowerShell
-Set-ExecutionPolicy Bypass -Scope Process -Force
+# Run the script (auto-installs if first run)
 .\Antivirus.ps1
 ```
 
-### Installation Process
+### Stopping the Antivirus
 
-When first run, the script automatically:
+Press `Ctrl+C` **5 times** (termination protection enabled)
 
-1. ✅ Creates installation directory at `C:\ProgramData\AntivirusProtection`
-2. ✅ Sets up folder structure (logs, quarantine, data, reports)
-3. ✅ Copies itself to the installation directory
-4. ✅ Creates Windows scheduled task for auto-start
-5. ✅ Initializes threat intelligence databases
-6. ✅ Sets up event log source (`MalwareDetector`)
+Or manually stop:
+```powershell
+# Find the process
+Get-Process | Where-Object {$_.Path -like "*AntivirusProtection*"}
 
-### Uninstallation
+# Stop it
+Stop-Process -Name powershell -Force
+```
+
+### Uninstalling
 
 ```powershell
-# Run with -Uninstall switch
 .\Antivirus.ps1 -Uninstall
 ```
 
 This will:
-- Stop all monitoring jobs
+- Stop all running instances
 - Remove scheduled task
-- Optionally delete installation directory (with confirmation)
+- Delete installation directory
+- Clean up all files
 
 ---
 
-## 🚀 Quick Start
+## 🔍 Detection Modules
 
-### Basic Usage
+The system includes **48 specialized detection modules**:
 
-```powershell
-# Start the antivirus (Administrator PowerShell)
-.\Antivirus.ps1
-
-# The script will:
-# - Install itself if first run
-# - Start all detection modules
-# - Begin real-time monitoring
-# - Display status and active job count
-```
-
-### Check Status
-
-```powershell
-# View running processes
-Get-Process powershell | Where-Object { $_.CommandLine -like "*Antivirus*" }
-
-# Check logs
-Get-Content "C:\ProgramData\AntivirusProtection\Logs\antivirus_log.txt" -Tail 50
-
-# View quarantined files
-Get-ChildItem "C:\ProgramData\AntivirusProtection\Quarantine"
-```
-
----
-
-## 🔬 Detection Modules
-
-### Core Detection Modules (40+)
-
+### Malware Detection
 | Module | Interval | Description |
 |--------|----------|-------------|
-| **HashDetection** | 15s | SHA256 hash lookups against threat intelligence APIs |
-| **LOLBinDetection** | 15s | Living-off-the-Land binary abuse detection |
-| **ProcessAnomalyDetection** | 15s | Unusual process behavior and parent-child relationships |
-| **AMSIBypassDetection** | 15s | Anti-Malware Scan Interface bypass attempts |
-| **CredentialDumpDetection** | 15s | LSASS access, Mimikatz, and credential dumping tools |
-| **RansomwareDetection** | 15s | File encryption patterns, shadow copy deletion |
-| **KeyloggerDetection** | 45s | Keyboard hooks and keylogging behavior |
-| **ProcessHollowingDetection** | 30s | Process replacement and hollowing techniques |
-| **CodeInjectionDetection** | 30s | Memory injection and code injection APIs |
-| **FilelessDetection** | 20s | PowerShell fileless attacks, WMI, Registry-based |
-| **ReflectiveDLLInjectionDetection** | 30s | Reflective DLL loading in memory |
-| **DLLHijackingDetection** | 90s | DLL search order hijacking |
-| **TokenManipulationDetection** | 60s | Token impersonation and privilege escalation |
-| **BeaconDetection** | 60s | C2 beacon patterns and communication |
-| **NetworkAnomalyDetection** | 30s | Suspicious network connections and ports |
-| **NetworkTrafficMonitoring** | 45s | Deep packet inspection and traffic analysis |
-| **DNSExfiltrationDetection** | 30s | DNS tunneling and data exfiltration |
-| **LateralMovementDetection** | 30s | SMB, WMI, and remote execution patterns |
-| **DataExfiltrationDetection** | 30s | Unauthorized data transfer patterns |
-| **MobileDeviceMonitoring** | 15s | iPhone/Android device monitoring and malware detection |
-| **AttackToolsDetection** | 30s | Dark web attack tools (Hydra, Mimikatz, etc.) |
-| **AdvancedThreatDetection** | 20s | Multi-layered advanced threat detection framework |
+| **HashDetection** | 15s | SHA256 hash matching against threat databases |
+| **AdvancedThreatDetection** | 20s | Comprehensive threat signature and behavioral analysis |
+| **AttackToolsDetection** | 30s | Detection of hacking tools (Metasploit, Mimikatz, etc.) |
+| **FileEntropyDetection** | 120s | High entropy file detection (packed/encrypted malware) |
+
+### Process & Memory Protection
+| Module | Interval | Description |
+|--------|----------|-------------|
+| **ProcessAnomalyDetection** | 15s | Unusual process behavior detection |
+| **ProcessHollowingDetection** | 30s | Process hollowing attack detection |
+| **ProcessCreationDetection** | 10s | Real-time process creation monitoring |
+| **MemoryScanning** | 90s | In-memory threat scanning |
+| **CodeInjectionDetection** | 30s | DLL injection and code injection detection |
+| **ReflectiveDLLInjectionDetection** | 30s | Reflective DLL loading detection |
+
+### Network Security
+| Module | Interval | Description |
+|--------|----------|-------------|
+| **NetworkAnomalyDetection** | 30s | Unusual network activity detection |
+| **NetworkTrafficMonitoring** | 45s | Continuous network traffic analysis |
+| **DNSExfiltrationDetection** | 30s | DNS-based data exfiltration detection |
+| **BeaconDetection** | 60s | C2 beacon communication detection |
+| **DataExfiltrationDetection** | 30s | Data exfiltration attempt detection |
+| **LateralMovementDetection** | 30s | Lateral movement attack detection |
 
 ### Persistence Detection
-
 | Module | Interval | Description |
 |--------|----------|-------------|
+| **ScheduledTaskDetection** | 120s | Malicious scheduled task detection |
+| **RegistryPersistenceDetection** | 120s | Registry-based persistence detection |
 | **WMIPersistenceDetection** | 120s | WMI event subscription persistence |
-| **ScheduledTaskDetection** | 120s | Unauthorized scheduled task creation |
-| **RegistryPersistenceDetection** | 120s | Registry run keys and startup items |
-| **ServiceMonitoring** | 60s | New service installation and monitoring |
+| **DLLHijackingDetection** | 90s | DLL hijacking vulnerability detection |
+
+### System Protection
+| Module | Interval | Description |
+|--------|----------|-------------|
+| **RootkitDetection** | 180s | Kernel-level rootkit detection |
+| **ServiceMonitoring** | 60s | Suspicious service detection |
+| **FirewallRuleMonitoring** | 120s | Firewall rule change detection |
+| **EventLogMonitoring** | 60s | Security event log analysis |
+| **ShadowCopyMonitoring** | 30s | Shadow copy deletion detection (ransomware) |
+
+### Credential Protection
+| Module | Interval | Description |
+|--------|----------|-------------|
+| **CredentialDumpDetection** | 15s | LSASS/SAM dump detection |
+| **TokenManipulationDetection** | 60s | Token impersonation detection |
+| **PasswordManagement** | 120s | Password policy enforcement |
+
+### Advanced Threats
+| Module | Interval | Description |
+|--------|----------|-------------|
+| **FilelessDetection** | 20s | Fileless malware detection (PowerShell, WMI) |
+| **RansomwareDetection** | 15s | Real-time ransomware encryption detection |
+| **AMSIBypassDetection** | 15s | AMSI bypass attempt detection |
+| **LOLBinDetection** | 15s | Living Off The Land binary detection |
+
+### Device & Privacy Protection
+| Module | Interval | Description |
+|--------|----------|-------------|
+| **USBMonitoring** | 20s | USB device insertion monitoring |
+| **MobileDeviceMonitoring** | 15s | Mobile device connection monitoring |
+| **WebcamGuardian** | 5s | Unauthorized webcam access prevention |
+| **ClipboardMonitoring** | 30s | Clipboard data exfiltration detection |
 
 ### System Monitoring
-
 | Module | Interval | Description |
 |--------|----------|-------------|
-| **USBMonitoring** | 20s | USB device connection and autorun detection |
-| **BrowserExtensionMonitoring** | 300s | Chrome/Edge/Firefox extension scanning |
-| **FirewallRuleMonitoring** | 120s | Unauthorized firewall rule changes |
-| **EventLogMonitoring** | 60s | Security event log analysis |
-| **ShadowCopyMonitoring** | 30s | Volume shadow copy deletion alerts |
-| **COMMonitoring** | 120s | COM object hijacking detection |
-| **NamedPipeMonitoring** | 45s | Named pipe creation and access |
-
-### Advanced Analysis
-
-| Module | Interval | Description |
-|--------|----------|-------------|
-| **MemoryScanning** | 90s | Memory region scanning for shellcode |
-| **RootkitDetection** | 180s | Rootkit and kernel-level threat detection |
-| **FileEntropyDetection** | 120s | High entropy file detection (packed malware) |
-| **ProcessCreationDetection** | 10s | Real-time process creation monitoring |
+| **COMMonitoring** | 120s | COM object modification detection |
+| **BrowserExtensionMonitoring** | 300s | Browser extension analysis |
+| **NamedPipeMonitoring** | 45s | Named pipe communication monitoring |
 | **HoneypotMonitoring** | 30s | Honeypot file access detection |
-| **ElfCatcher** | 30s | Executable and Linkable Format analysis |
 
-### Privacy & Protection
-
+### Response & Management
 | Module | Interval | Description |
 |--------|----------|-------------|
-| **WebcamGuardian** | 5s | Permission-based webcam access control |
-| **ClipboardMonitoring** | 30s | Sensitive data exposure detection |
-| **KeyScramblerManagement** | 60s | Anti-keylogger keyboard hook protection |
-| **PrivacyForgeSpoofing** | 60s | Identity and telemetry spoofing |
-
-### Management
-
-| Module | Interval | Description |
-|--------|----------|-------------|
-| **QuarantineManagement** | 300s | Automatic quarantine cleanup (30-day retention) |
 | **ResponseEngine** | 10s | Automated threat response actions |
-| **PasswordManagement** | 120s | Password security and policy enforcement |
+| **QuarantineManagement** | 300s | Quarantine file lifecycle management |
+| **ElfDLLUnloader** | 10s | Event Log File (ELF) DLL unloading |
+| **UnsignedDLLRemover** | 300s | Unsigned DLL detection and removal |
+| **PrivacyForgeSpoofing** | 60s | Privacy protection and data spoofing |
+
+### Special Features
+| Module | Interval | Description |
+|--------|----------|-------------|
+| **KeyScramblerManagement** | 60s | Keylogger protection via input scrambling |
 
 ---
 
 ## ⚙️ Configuration
 
-### Job Intervals
+### Default Configuration
 
-Customize detection intervals in `$Script:ManagedJobConfig`:
+The script uses sensible defaults, but you can modify the `$Config` hashtable in the script:
+
+```powershell
+$Config = @{
+    # Paths
+    LogPath = "C:\ProgramData\AntivirusProtection\Logs"
+    QuarantinePath = "C:\ProgramData\AntivirusProtection\Quarantine"
+    DatabasePath = "C:\ProgramData\AntivirusProtection\Data"
+    
+    # API Endpoints
+    CirclHashLookupUrl = "https://hashlookup.circl.lu/lookup/sha256"
+    CymruApiUrl = "https://api.malwarehash.cymru.com/v1/hash"
+    MalwareBazaarApiUrl = "https://mb-api.abuse.ch/api/v1/"
+    
+    # Behavior
+    AutoKillThreats = $true      # Automatically terminate threats
+    AutoQuarantine = $true       # Automatically quarantine files
+    EnableUnsignedDLLScanner = $true
+    MaxMemoryUsageMB = 500
+}
+```
+
+### Module Intervals
+
+Adjust detection intervals in `$Script:ManagedJobConfig`:
 
 ```powershell
 $Script:ManagedJobConfig = @{
     HashDetectionIntervalSeconds = 15
-    RansomwareDetectionIntervalSeconds = 15
-    ProcessHollowingDetectionIntervalSeconds = 30
-    # ... adjust intervals based on system resources
+    RootkitDetectionIntervalSeconds = 180
+    # ... etc
 }
 ```
 
-### Main Configuration
+### Exclusion Lists
 
-Modify `$Config` hashtable for core settings:
+Add paths or processes to exclude from scanning:
 
 ```powershell
-$Config = @{
-    EDRName = "MalwareDetector"              # Event log source name
-    LogPath = "$Script:InstallPath\Logs"     # Log directory
-    QuarantinePath = "$Script:InstallPath\Quarantine"
-    DatabasePath = "$Script:InstallPath\Data"
-    
-    # Threat Intelligence APIs
-    CirclHashLookupUrl = "https://hashlookup.circl.lu/lookup/sha256"
-    MalwareBazaarApiUrl = "https://mb-api.abuse.ch/api/v1/"
-    
-    # Response Settings
-    AutoKillThreats = $true          # Auto-terminate malicious processes
-    AutoQuarantine = $true           # Auto-quarantine malicious files
-    MaxMemoryUsageMB = 500           # Maximum memory usage
-    
-    # Scanning Exclusions
-    ExclusionPaths = @(...)          # Paths to exclude from scanning
-    ExclusionProcesses = @("powershell", "pwsh")
+$Config.ExclusionPaths = @(
+    "C:\Program Files\YourApp",
+    "C:\CustomPath"
+)
+
+$Config.ExclusionProcesses = @(
+    "yourprocess",
+    "anotherprocess"
+)
+```
+
+---
+
+## 🌐 API Integration
+
+The system integrates with three external threat intelligence APIs:
+
+### 1. CIRCL Hash Lookup
+- **URL**: `https://hashlookup.circl.lu/lookup/sha256`
+- **Purpose**: SHA256 hash verification
+- **Response**: Known malicious file identification
+
+### 2. MalwareBazaar
+- **URL**: `https://mb-api.abuse.ch/api/v1/`
+- **Purpose**: Comprehensive malware database
+- **Response**: Malware family classification
+
+### 3. Cymru Malware Hash Registry
+- **URL**: `https://api.malwarehash.cymru.com/v1/hash`
+- **Purpose**: Community-driven hash registry
+- **Response**: Malware confirmation
+
+### API Verification Flow
+
+1. File detected as suspicious
+2. Calculate SHA256 hash
+3. Query all three APIs (with timeout)
+4. If any API confirms malicious → Quarantine
+5. If APIs unavailable → Quarantine based on detection engine assessment
+
+**Note**: API checks are advisory - the detection engine can quarantine based on behavioral analysis even if APIs don't respond.
+
+---
+
+## 🔒 Security Features
+
+### Protection Mechanisms
+
+- **Mutex-based Single Instance** - Prevents multiple instances
+- **PID File Tracking** - Process identification and verification
+- **Termination Protection** - Requires 5 Ctrl+C attempts to stop
+- **Auto-Restart** - Scheduled task ensures continuous operation
+- **Process Watchdog** - Monitors and restarts if crashed
+
+### Driver Protection
+
+- **Inbox Driver Protection** - Prevents removal of Windows system drivers
+- **Minifilter Driver Safety** - Automatic removal disabled to prevent BSODs
+- **Driver Signature Verification** - Validates Microsoft-signed drivers
+
+### Quarantine System
+
+- **Automatic Isolation** - Threats moved to quarantine automatically
+- **API Verification** - Cross-referenced with threat intelligence
+- **File Preservation** - Original files preserved with timestamp
+- **Auto-Cleanup** - Files older than 30 days automatically removed
+
+---
+
+## 📊 Logging
+
+### Log Locations
+
+All logs are stored in `C:\ProgramData\AntivirusProtection\Logs\`:
+
+- **EDR Logs**: `EDR_YYYY-MM-DD.log` - All detection events
+- **Stability Log**: `stability_log.txt` - System stability and errors
+- **Module Logs**: Individual module logs (e.g., `advanced_threat_detection.log`)
+
+### Log Levels
+
+- **Debug** - Detailed diagnostic information
+- **Info** - General informational messages
+- **Warning** - Potential threats or issues
+- **Error** - Errors and failures
+
+### Example Log Entry
+
+```
+[2026-01-13 07:08:58] [Warning] [ResponseEngine] SUCCESS: Quarantined C:\Temp\malware.exe -> C:\ProgramData\AntivirusProtection\Quarantine\20260113_070858_malware.exe (Reason: Advanced Threat Detected, Source: ResponseEngine)
+```
+
+---
+
+## 🐛 Troubleshooting
+
+### Issue: "Another instance is already running"
+
+**Solution**: 
+```powershell
+# Uninstall first
+.\Antivirus.ps1 -Uninstall
+
+# Then reinstall
+.\Antivirus.ps1
+```
+
+### Issue: "Script requires administrator privileges"
+
+**Solution**: Right-click PowerShell and select "Run as Administrator"
+
+### Issue: Quarantine folder is empty
+
+**Check**:
+1. Review logs: `C:\ProgramData\AntivirusProtection\Logs\EDR_*.log`
+2. Verify `AutoQuarantine = $true` in config
+3. Check if files exist at threat paths (some threats may be process-based)
+
+### Issue: High CPU/Memory Usage
+
+**Solution**: 
+- Increase module intervals in `$Script:ManagedJobConfig`
+- Add more exclusions to reduce scan scope
+- Adjust `MaxMemoryUsageMB` in config
+
+### Issue: False Positives
+
+**Solution**:
+- Add legitimate paths to `$Config.ExclusionPaths`
+- Add process names to `$Config.ExclusionProcesses`
+- Review detection logs to identify patterns
+
+---
+
+## 📝 Module Development
+
+### Adding a New Detection Module
+
+1. **Create the function**:
+```powershell
+function Invoke-YourModuleName {
+    try {
+        # Your detection logic here
+        $threats = @()
+        
+        # Detection code...
+        
+        if ($threats.Count -gt 0) {
+            foreach ($threat in $threats) {
+                Add-ThreatToResponseQueue -ThreatType "YourThreatType" -ThreatPath $threat.Path -Severity "High"
+            }
+        }
+        
+        return $threats.Count
+    } catch {
+        Write-EDRLog -Module "YourModuleName" -Message "Error: $_" -Level "Error"
+        return 0
+    }
 }
 ```
 
-### Recommended Intervals by System
-
-| System Type | Aggressive | Balanced | Light |
-|-------------|------------|----------|-------|
-| **High-end Desktop** | 10-15s | 30-60s | 60-120s |
-| **Standard Desktop** | 30-60s | 60-120s | 120-300s |
-| **Server** | 60-120s | 120-180s | 180-300s |
-
----
-
-## 🎯 Advanced Features
-
-### Multi-Layered Threat Detection
-
-The advanced detection framework provides **renaming-resistant** threat detection:
-
+2. **Register the module**:
 ```powershell
-# Framework automatically uses:
-# - Hash-based detection (SHA256)
-# - Signature pattern matching (YARA-like)
-# - Entropy analysis (packed/obfuscated)
-# - Behavioral pattern detection
-# - Digital signature verification
+# Add to module list (around line 10254)
+"YourModuleName",
+
+# Add interval config (around line 19)
+YourModuleNameIntervalSeconds = 60
 ```
 
-### Mobile Device Protection
-
-**Comprehensive mobile device monitoring:**
-
-- ✅ iPhone/iPad detection via WPD/MTP
-- ✅ Android device monitoring
-- ✅ Banking trojan detection (Anatsa, RatOn, Klopatra, Sturnus, etc.)
-- ✅ ADB connection monitoring
-- ✅ Chat app data access detection (WhatsApp/Telegram)
-- ✅ NFC-based attack detection (RatOn)
-- ✅ Mobile malware signature database (40+ families)
-
-### Attack Tools Detection
-
-**Dark web attack tool detection:**
-
-- 🔍 **Password Crackers**: Hydra, John the Ripper, Hashcat, Medusa
-- 🔍 **Exploitation Frameworks**: Metasploit, Cobalt Strike, Empire, Covenant
-- 🔍 **Network Scanners**: Nmap, Masscan, Zmap
-- 🔍 **Credential Dumpers**: Mimikatz, LaZagne, WCE, Procdump
-- 🔍 **Post-Exploitation**: BloodHound, PowerSploit, Impacket, CrackMapExec
-- 🔍 **Web Attack Tools**: SQLMap, Burp Suite, Nikto, OWASP ZAP
-
-**Detection methods:**
-- Hash-based (works even if renamed)
-- Signature-based (file content patterns)
-- Behavioral (command-line analysis)
-- Entropy analysis (packed tools)
-
-### Webcam Guardian
-
-**Permission-based webcam protection:**
-
-1. Webcams **disabled by default** on startup
-2. When application requests camera access:
-   - Shows Windows notification for approval
-   - User grants/denies permission
-   - If granted, camera enabled for that process only
-3. When application closes:
-   - Camera automatically disabled
-   - Access revoked
-
-### PrivacyForge
-
-**Anti-fingerprinting and telemetry spoofing:**
-
-- 🔄 **Identity Rotation** - Generates fake user profiles hourly
-- 📊 **Telemetry Spoofing** - Sends fake system metrics
-- 📱 **Sensor Data** - Spoofs accelerometer, gyroscope, etc.
-- 🌐 **Browser Fingerprint** - Randomized user agents and screen sizes
-- 🎮 **Game Telemetry** - Fake player IDs and hardware IDs
-
----
-
-## 🏗️ Architecture
-
-### Single-Threaded Design
-
-All detection modules run in a single PowerShell process using a tick-based scheduler:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Main Loop (1s tick)                  │
-├─────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
-│  │   Module A  │  │   Module B  │  │   Module C  │     │
-│  │  (15s int)  │  │  (30s int)  │  │  (60s int)  │     │
-│  └─────────────┘  └─────────────┘  └─────────────┘     │
-│                                                         │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │              Managed Job Scheduler              │   │
-│  │  - Tracks NextRunUtc for each module            │   │
-│  │  - Invokes modules when interval elapsed        │   │
-│  │  - Handles errors and backoff                   │   │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Response Pipeline
-
-```
-Detection → Threat Queue → Response Engine → Action
-                              │
-                              ├─► Quarantine
-                              ├─► Kill Process
-                              ├─► Block Network
-                              ├─► Log Event
-                              └─► Alert (Event Log)
-```
-
-### Self-Protection
-
-- **Ctrl+C Protection** - Requires 5 consecutive attempts to stop
-- **Process Watchdog** - Background job monitors main process
-- **Auto-Restart** - Scheduled task recreates process if killed
-- **Mutex Protection** - Prevents duplicate instances
-- **Consecutive Error Tracking** - Triggers recovery after 10 errors
-- **Job Backoff** - Failed jobs retry with exponential backoff
-
----
-
-## 🌐 Threat Intelligence
-
-### Hash Lookups
-
-Integrated with multiple threat intelligence sources:
-
-| Service | Description | API Endpoint |
-|---------|-------------|--------------|
-| **CIRCL Hashlookup** | Luxembourg CERT hash database | `hashlookup.circl.lu` |
-| **MalwareBazaar** | abuse.ch malware sample repository | `mb-api.abuse.ch` |
-| **Team Cymru** | Malware hash registry | `api.malwarehash.cymru.com` |
-
-### LOLBin Detection
-
-Comprehensive detection of Living-off-the-Land binary abuse:
-
-- `certutil` - Download/decode operations
-- `bitsadmin` - Background file transfers
-- `mshta` - HTA script execution
-- `regsvr32` - Squiblydoo attacks
-- `rundll32` - Proxy execution
-- `wmic` - Remote execution and XSL abuse
-- `powershell` - Encoded commands and evasion
-- `msiexec` - Silent remote installations
-
-### Mobile Malware Database
-
-**Banking Trojans (40+ families):**
-- Anatsa, RatOn, Klopatra, Sturnus, Frogblight, GodFather
-- Anubis, Cerberus, EventBot, Exobot, FakeBank, Ginp, Gustuff
-- Hydra, Marcher, Medusa, Octo, Svpeng, TinyBanker, Zeus, Zitmo
-- BankBot, Asacub, Acecard, TeaBot, and more
-
-**Spyware & RATs:**
-- Pegasus, FinFisher, mSpy, Spyera, FlexiSpy
-- RatOn, Klopatra, SpyNote, AndroRAT, DroidJack
-
-**Ransomware:**
-- Simplocker, Koler, Lockerpin, Fusob, Jisut, Charger
-
----
-
-## 📊 Logging & Monitoring
-
-### Log Files
-
-| File | Description | Location |
-|------|-------------|----------|
-| `antivirus_log.txt` | Main activity and threat log | `Logs\` |
-| `stability_log.txt` | System health and startup/shutdown events | `Logs\` |
-| `[module]_detections.log` | Per-module detection details | `Logs\` |
-| `EDR_[date].log` | Daily EDR activity log | `Logs\` |
-| `MobileDeviceMonitoring_[date].log` | Mobile device detection log | `Logs\` |
-| `AttackToolsDetection_[date].log` | Attack tool detection log | `Logs\` |
-| `AdvancedThreatDetection_[date].log` | Advanced threat detection log | `Logs\` |
-
-### Event Log Integration
-
-Writes to Windows Application Event Log with source `MalwareDetector`:
-
-| Event ID | Type | Description |
-|----------|------|-------------|
-| 1000 | Information | General information events |
-| 1001 | Error | Error conditions |
-| 1002 | Warning | Warning conditions |
-| 1003 | Threat Detected | Threat detection events |
-| 2000 | Alert | High-priority alerts |
-
-### View Logs
-
+3. **Start the module**:
 ```powershell
-# View main log
-Get-Content "C:\ProgramData\AntivirusProtection\Logs\antivirus_log.txt" -Tail 100
-
-# View event log
-Get-WinEvent -LogName Application -ProviderName MalwareDetector | Select-Object -First 50
-
-# View quarantined items
-Get-ChildItem "C:\ProgramData\AntivirusProtection\Quarantine" | Format-Table
+# Module will auto-start with others
 ```
-
----
-
-## ⚡ Performance
-
-### Resource Management
-
-- **Maximum Memory**: 500MB (configurable)
-- **Scan Limits**: Most scans limited to first 100-500 items
-- **Caching**: Prevents duplicate scans
-- **Staggered Intervals**: Spreads CPU load across time
-
-### Optimization Tips
-
-1. **Adjust Intervals**: Increase intervals for lower-end systems
-2. **Disable Modules**: Comment out unused modules in job list
-3. **Exclusion Lists**: Add trusted paths to `ExclusionPaths`
-4. **Memory Limit**: Reduce `MaxMemoryUsageMB` if needed
-
-### System Impact
-
-| System Type | CPU Usage | Memory Usage | Disk I/O |
-|-------------|-----------|--------------|----------|
-| **Idle** | < 1% | ~100-200MB | Minimal |
-| **Active Scanning** | 5-15% | ~200-400MB | Low |
-| **Threat Detected** | 10-20% | ~300-500MB | Moderate |
-
----
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-#### Script Won't Start
-
-```powershell
-# Check for existing instance
-Get-Process powershell | Where-Object { $_.CommandLine -like "*Antivirus*" }
-
-# Clear stale PID file
-Remove-Item "C:\ProgramData\AntivirusProtection\Data\antivirus.pid" -Force
-
-# Check mutex
-# Restart computer if mutex is stuck
-```
-
-#### High CPU Usage
-
-- Increase detection intervals in `$Script:ManagedJobConfig`
-- Disable resource-intensive modules (MemoryScanning, RootkitDetection)
-- Reduce scan limits in individual modules
-
-#### False Positives
-
-```powershell
-# Add to whitelist
-$whitelist = Get-Content "C:\ProgramData\AntivirusProtection\Data\whitelist.json" | ConvertFrom-Json
-$whitelist.Processes += "YourProcess.exe"
-$whitelist | ConvertTo-Json | Set-Content "C:\ProgramData\AntivirusProtection\Data\whitelist.json"
-
-# Adjust exclusion paths
-$Config.ExclusionPaths += "C:\YourPath"
-```
-
-#### Network Issues After Install
-
-```powershell
-# Reset proxy settings
-$regPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-Remove-ItemProperty -Path $regPath -Name "AutoConfigURL" -ErrorAction SilentlyContinue
-Set-ItemProperty -Path $regPath -Name "ProxyEnable" -Value 0
-```
-
-#### Webcam Issues
-
-```powershell
-# Manually enable webcam if needed
-Get-PnpDevice -Class Camera | Enable-PnpDevice -Confirm:$false
-```
-
----
-
-## 🔐 Security Considerations
-
-### Running Without Admin
-
-Some features require Administrator privileges:
-
-- ❌ WebcamGuardian (device control)
-- ❌ Password Management (registry access)
-- ❌ Firewall rule creation
-- ❌ Event log source creation
-- ⚠️ Reduced functionality if not elevated
-
-### Self-Protection Limitations
-
-While self-protection is robust, it can be bypassed by:
-
-- ⚠️ Kernel-level attacks
-- ⚠️ WMI process termination
-- ⚠️ Safe mode boot
-- ⚠️ Direct memory manipulation
-
-### Best Practices
-
-1. ✅ Run with Administrator privileges for full protection
-2. ✅ Keep PowerShell execution policy appropriately configured
-3. ✅ Regularly review logs for false positives
-4. ✅ Update threat signatures regularly
-5. ✅ Use in conjunction with other security tools
-6. ✅ Test in isolated environment before production
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Areas for improvement:
+Contributions are welcome! Please follow these guidelines:
 
-- 🔧 Additional detection signatures
-- ⚡ Performance optimizations
-- 🌍 Cross-platform support (PowerShell Core)
-- 🖥️ GUI dashboard
-- 🖥️ Central management server
-- 📚 Additional documentation
-- 🧪 Test cases and validation
+1. **Fork the repository**
+2. **Create a feature branch** (`git checkout -b feature/AmazingFeature`)
+3. **Follow PowerShell best practices**
+4. **Add comprehensive logging**
+5. **Test thoroughly** before submitting
+6. **Update documentation** as needed
+7. **Submit a pull request**
 
-### How to Contribute
+### Code Style
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+- Use `Write-EDRLog` for all logging
+- Follow existing function naming conventions (`Invoke-ModuleName`)
+- Include error handling in all functions
+- Document complex logic with comments
 
 ---
 
-## 📝 License
+## 📄 License
 
-This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ---
 
 ## ⚠️ Disclaimer
 
-**This software is provided for educational and authorized security testing purposes only.**
+**This software is provided "as is" without warranty of any kind.**
 
-Use responsibly and in compliance with applicable laws and regulations. The authors are not responsible for any misuse or damage caused by this software.
-
-**Always:**
-- ✅ Use only on systems you own or have explicit permission to test
-- ✅ Comply with local laws and regulations
-- ✅ Respect privacy and data protection requirements
-- ✅ Use in isolated test environments when possible
-
----
-
-## 👤 Author
-
-**Gorstak**
-
-*Built with PowerShell for Windows Security*
+- Use at your own risk
+- Not a replacement for commercial antivirus solutions
+- Designed for educational and research purposes
+- Always maintain backups
+- Test in isolated environments before production use
 
 ---
 
 ## 🙏 Acknowledgments
 
-- Threat intelligence providers (CIRCL, MalwareBazaar, Team Cymru)
-- PowerShell community
-- Security researchers and contributors
-- Open source security tools and frameworks
+- **CIRCL** - Hash lookup service
+- **MalwareBazaar** - Malware database
+- **Team Cymru** - Malware hash registry
+- **PowerShell Community** - Inspiration and support
+
+---
+
+## 📞 Support
+
+For issues, questions, or contributions:
+
+1. Check the [Troubleshooting](#-troubleshooting) section
+2. Review log files for detailed error messages
+3. Open an issue on GitHub
+4. Check existing issues for similar problems
 
 ---
 
 <div align="center">
 
-**⭐ If you find this project useful, please consider giving it a star! ⭐**
+**Made with ❤️ for the security community**
 
-[Report Bug](https://github.com/ads-blocker/Antivirus/issues) • [Request Feature](https://github.com/ads-blocker/Antivirus/issues) • [Documentation](https://github.com/ads-blocker/Antivirus)
+⭐ **Star this repo if you find it useful!** ⭐
 
 </div>
