@@ -36,6 +36,9 @@ $Script:ManagedJobConfig = @{
     BrowserExtensionMonitoringIntervalSeconds = 300
     ShadowCopyMonitoringIntervalSeconds = 30
     USBMonitoringIntervalSeconds = 20
+    MobileDeviceMonitoringIntervalSeconds = 15
+    AttackToolsDetectionIntervalSeconds = 30
+    AdvancedThreatDetectionIntervalSeconds = 20
     EventLogMonitoringIntervalSeconds = 60
     FirewallRuleMonitoringIntervalSeconds = 120
     ServiceMonitoringIntervalSeconds = 60
@@ -1077,6 +1080,389 @@ function Measure-FileEntropy {
     }
 }
 
+# ===================== Advanced Multi-Layered Threat Detection Framework =====================
+# This framework provides hash-based, signature-based, behavioral, and entropy-based detection
+# that is resilient against renaming and obfuscation. Can be used by any detection module.
+
+function Invoke-AdvancedThreatDetection {
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$FilePath,
+        
+        [Parameter(Mandatory=$false)]
+        [hashtable]$KnownHashes = @{},
+        
+        [Parameter(Mandatory=$false)]
+        [hashtable]$FileSignatures = @{},
+        
+        [Parameter(Mandatory=$false)]
+        [hashtable]$BehavioralIndicators = @{},
+        
+        [Parameter(Mandatory=$false)]
+        [string]$ProcessId = $null,
+        
+        [Parameter(Mandatory=$false)]
+        [string]$CommandLine = $null,
+        
+        [Parameter(Mandatory=$false)]
+        [bool]$CheckEntropy = $true,
+        
+        [Parameter(Mandatory=$false)]
+        [double]$EntropyThreshold = 7.5
+    )
+    
+    $detectionResults = @{
+        IsThreat = $false
+        ThreatName = $null
+        DetectionMethods = @()
+        Confidence = 0
+        Risk = "LOW"
+        Details = @{}
+    }
+    
+    if (-not (Test-Path $FilePath)) {
+        return $detectionResults
+    }
+    
+    try {
+        $fileInfo = Get-Item $FilePath -ErrorAction Stop
+        $detectionCount = 0
+        
+        # Method 1: Hash-Based Detection (SHA256)
+        if ($KnownHashes.Count -gt 0) {
+            try {
+                $fileHash = (Get-FileHash -Path $FilePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                
+                foreach ($threatName in $KnownHashes.Keys) {
+                    if ($KnownHashes[$threatName] -contains $fileHash) {
+                        $detectionResults.IsThreat = $true
+                        $detectionResults.ThreatName = $threatName
+                        $detectionResults.DetectionMethods += "HashMatch"
+                        $detectionResults.Confidence += 100
+                        $detectionResults.Risk = "CRITICAL"
+                        $detectionResults.Details["Hash"] = $fileHash
+                        $detectionCount++
+                        break
+                    }
+                }
+            } catch { }
+        }
+        
+        # Method 2: File Signature/Pattern Detection (YARA-like)
+        if ($FileSignatures.Count -gt 0 -and $fileInfo.Length -lt 50MB) {
+            try {
+                $fileBytes = [System.IO.File]::ReadAllBytes($FilePath)
+                $fileContent = [System.Text.Encoding]::ASCII.GetString($fileBytes[0..[Math]::Min(1048576, $fileBytes.Length-1)])
+                
+                foreach ($threatName in $FileSignatures.Keys) {
+                    $matchCount = 0
+                    $matchedSignatures = @()
+                    
+                    foreach ($signature in $FileSignatures[$threatName]) {
+                        if ($fileContent -match [regex]::Escape($signature)) {
+                            $matchCount++
+                            $matchedSignatures += $signature
+                        }
+                    }
+                    
+                    # If multiple signatures match, it's likely this threat
+                    if ($matchCount -ge 2) {
+                        $detectionResults.IsThreat = $true
+                        $detectionResults.ThreatName = $threatName
+                        $detectionResults.DetectionMethods += "SignatureMatch"
+                        $detectionResults.Confidence += ($matchCount * 20)
+                        if ($detectionResults.Risk -ne "CRITICAL") {
+                            $detectionResults.Risk = if ($matchCount -ge 3) { "CRITICAL" } else { "HIGH" }
+                        }
+                        $detectionResults.Details["SignatureMatches"] = $matchCount
+                        $detectionResults.Details["MatchedSignatures"] = $matchedSignatures
+                        $detectionCount++
+                    }
+                }
+            } catch { }
+        }
+        
+        # Method 3: Entropy Analysis (Packed/Obfuscated Detection)
+        if ($CheckEntropy -and $fileInfo.Length -lt 10MB) {
+            try {
+                $entropy = Measure-FileEntropy -FilePath $FilePath
+                
+                if ($entropy -gt $EntropyThreshold) {
+                    # High entropy = possibly packed/obfuscated
+                    $sig = Get-AuthenticodeSignature -FilePath $FilePath -ErrorAction SilentlyContinue
+                    $isSigned = $sig.Status -eq "Valid"
+                    
+                    if (-not $isSigned) {
+                        $detectionResults.IsThreat = $true
+                        if (-not $detectionResults.ThreatName) {
+                            $detectionResults.ThreatName = "SuspiciousPackedTool"
+                        }
+                        $detectionResults.DetectionMethods += "EntropyAnalysis"
+                        $detectionResults.Confidence += 30
+                        if ($detectionResults.Risk -eq "LOW") {
+                            $detectionResults.Risk = "MEDIUM"
+                        }
+                        $detectionResults.Details["Entropy"] = [Math]::Round($entropy, 2)
+                        $detectionResults.Details["IsSigned"] = $isSigned
+                        $detectionCount++
+                    }
+                }
+            } catch { }
+        }
+        
+        # Method 4: Behavioral Pattern Detection (Command Line Analysis)
+        if ($CommandLine -and $BehavioralIndicators.Count -gt 0) {
+            try {
+                foreach ($behaviorType in $BehavioralIndicators.Keys) {
+                    $patterns = $BehavioralIndicators[$behaviorType]
+                    if ($null -eq $patterns) { continue }
+                    
+                    $matchCount = 0
+                    foreach ($pattern in $patterns) {
+                        if ($CommandLine -match $pattern) {
+                            $matchCount++
+                        }
+                    }
+                    
+                    if ($matchCount -gt 0) {
+                        $detectionResults.IsThreat = $true
+                        if (-not $detectionResults.ThreatName) {
+                            $detectionResults.ThreatName = "SuspiciousBehavior_$behaviorType"
+                        }
+                        $detectionResults.DetectionMethods += "BehavioralPattern"
+                        $detectionResults.Confidence += ($matchCount * 15)
+                        if ($detectionResults.Risk -ne "CRITICAL") {
+                            $detectionResults.Risk = if ($matchCount -ge 2) { "HIGH" } else { "MEDIUM" }
+                        }
+                        $detectionResults.Details["BehaviorType"] = $behaviorType
+                        $detectionResults.Details["BehaviorMatches"] = $matchCount
+                        $detectionCount++
+                    }
+                }
+            } catch { }
+        }
+        
+        # Method 5: Digital Signature Verification
+        try {
+            $sig = Get-AuthenticodeSignature -FilePath $FilePath -ErrorAction SilentlyContinue
+            $detectionResults.Details["SignatureStatus"] = $sig.Status
+            $detectionResults.Details["IsSigned"] = ($sig.Status -eq "Valid")
+            
+            # Unsigned executables in suspicious locations are more suspicious
+            if ($sig.Status -ne "Valid" -and $detectionCount -gt 0) {
+                $detectionResults.Confidence += 10
+            }
+        } catch { }
+        
+        # Calculate final risk based on confidence
+        if ($detectionResults.Confidence -ge 80) {
+            $detectionResults.Risk = "CRITICAL"
+        } elseif ($detectionResults.Confidence -ge 60) {
+            $detectionResults.Risk = "HIGH"
+        } elseif ($detectionResults.Confidence -ge 40) {
+            $detectionResults.Risk = "MEDIUM"
+        }
+        
+        $detectionResults.Details["DetectionCount"] = $detectionCount
+        $detectionResults.Details["FilePath"] = $FilePath
+        $detectionResults.Details["FileSize"] = "$([Math]::Round($fileInfo.Length / 1MB, 2)) MB"
+        
+    } catch {
+        Write-AVLog "Advanced threat detection error for $FilePath : $_" "WARN" "advanced_threat_detection.log"
+    }
+    
+    return $detectionResults
+}
+
+# Standalone job for comprehensive advanced threat detection across the system
+function Invoke-SystemWideAdvancedThreatDetection {
+    $detections = @()
+    $threats = @()
+    
+    try {
+        # Comprehensive threat signature database
+        $threatSignatures = @{
+            # Malware families
+            "Trojan" = @(
+                "trojan", "backdoor", "rat", "remote.*access", "keylogger",
+                "stealer", "spyware", "adware", "rootkit"
+            )
+            "Ransomware" = @(
+                "ransomware", "encrypt", "decrypt", "bitcoin", "payment.*required",
+                "your.*files.*encrypted", "lock.*screen"
+            )
+            "BankingTrojan" = @(
+                "banking", "financial", "credit.*card", "account.*number",
+                "login.*credentials", "password.*stealer"
+            )
+            "Cryptominer" = @(
+                "miner", "mining", "cryptocurrency", "bitcoin.*miner",
+                "monero", "xmrig", "ccminer"
+            )
+            # Attack tools
+            "PasswordCracker" = @(
+                "hydra", "john.*ripper", "hashcat", "brute.*force",
+                "dictionary.*attack", "wordlist", "password.*crack"
+            )
+            "CredentialDumper" = @(
+                "mimikatz", "lsadump", "sekurlsa", "wdigest",
+                "credential.*dump", "password.*dump"
+            )
+            "NetworkScanner" = @(
+                "nmap", "masscan", "port.*scan", "network.*scan",
+                "host.*scan", "reconnaissance"
+            )
+            "ExploitationFramework" = @(
+                "metasploit", "cobalt.*strike", "empire", "covenant",
+                "exploit", "payload", "meterpreter"
+            )
+        }
+        
+        # Behavioral indicators
+        $behavioralPatterns = @{
+            "CredentialDumping" = @(
+                "lsass", "sam.*dump", "security.*dump", "system.*dump",
+                "reg.*save.*sam", "reg.*save.*security"
+            )
+            "LateralMovement" = @(
+                "psexec", "wmic.*process", "winrm", "smbexec",
+                "lateral.*movement", "pass.*the.*hash"
+            )
+            "Persistence" = @(
+                "schtasks.*create", "reg.*add.*run", "startup",
+                "scheduled.*task", "registry.*run"
+            )
+            "DataExfiltration" = @(
+                "upload", "exfiltrate", "send.*data", "http.*post",
+                "ftp.*put", "sftp.*put"
+            )
+        }
+        
+        # Scan running processes
+        $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+        
+        foreach ($proc in $processes) {
+            try {
+                $procPath = $proc.ExecutablePath
+                if (-not $procPath -or -not (Test-Path $procPath)) { continue }
+                
+                $procName = Split-Path -Leaf $procPath -ErrorAction SilentlyContinue
+                $procCmdLine = $proc.CommandLine
+                
+                # Use advanced detection framework
+                $detectionResult = Invoke-AdvancedThreatDetection `
+                    -FilePath $procPath `
+                    -FileSignatures $threatSignatures `
+                    -BehavioralIndicators $behavioralPatterns `
+                    -CommandLine $procCmdLine `
+                    -CheckEntropy $true
+                
+                if ($detectionResult.IsThreat) {
+                    $threats += @{
+                        Type = "Advanced Threat Detected: $($detectionResult.ThreatName)"
+                        ProcessName = $procName
+                        ProcessPath = $procPath
+                        ProcessId = $proc.ProcessId
+                        CommandLine = $procCmdLine
+                        DetectionMethods = $detectionResult.DetectionMethods -join ", "
+                        Confidence = $detectionResult.Confidence
+                        Risk = $detectionResult.Risk
+                        Details = $detectionResult.Details
+                        Timestamp = Get-Date
+                    }
+                    
+                    # Auto-terminate critical threats
+                    if ($Config.AutoKillThreats -and $detectionResult.Risk -eq "CRITICAL") {
+                        try {
+                            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                            Write-AVLog "Terminated advanced threat: $procName ($($detectionResult.ThreatName))" "THREAT" "advanced_threat_detection.log"
+                        } catch { }
+                    }
+                }
+            } catch { }
+        }
+        
+        # Scan suspicious directories for files
+        $scanPaths = @(
+            "$env:USERPROFILE\Downloads",
+            "$env:USERPROFILE\Desktop",
+            "$env:TEMP",
+            "$env:APPDATA\Local\Temp",
+            "C:\Tools",
+            "C:\Hacking"
+        )
+        
+        foreach ($scanPath in $scanPaths) {
+            if (-not (Test-Path $scanPath)) { continue }
+            
+            try {
+                $exeFiles = Get-ChildItem -Path $scanPath -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Length -lt 50MB } |
+                    Select-Object -First 30
+                
+                foreach ($file in $exeFiles) {
+                    try {
+                        $detectionResult = Invoke-AdvancedThreatDetection `
+                            -FilePath $file.FullName `
+                            -FileSignatures $threatSignatures `
+                            -CheckEntropy $true
+                        
+                        if ($detectionResult.IsThreat) {
+                            $threats += @{
+                                Type = "Advanced Threat File Detected: $($detectionResult.ThreatName)"
+                                FilePath = $file.FullName
+                                FileName = $file.Name
+                                DetectionMethods = $detectionResult.DetectionMethods -join ", "
+                                Confidence = $detectionResult.Confidence
+                                Risk = $detectionResult.Risk
+                                Details = $detectionResult.Details
+                                Timestamp = Get-Date
+                            }
+                            
+                            # Auto-quarantine
+                            if ($Config.AutoQuarantine -and $detectionResult.Risk -in @("HIGH", "CRITICAL")) {
+                                try {
+                                    Move-ToQuarantine -FilePath $file.FullName -Reason "Advanced threat detected: $($detectionResult.ThreatName)"
+                                    Write-AVLog "Quarantined advanced threat: $($file.Name)" "THREAT" "advanced_threat_detection.log"
+                                } catch { }
+                            }
+                        }
+                    } catch { }
+                }
+            } catch { }
+        }
+        
+        # Log all detections
+        if ($threats.Count -gt 0) {
+            foreach ($threat in $threats) {
+                Write-AVLog "ADVANCED THREAT: $($threat.Type) - $($threat.ProcessName -or $threat.FileName) - Methods: $($threat.DetectionMethods) - Confidence: $($threat.Confidence)% - Risk: $($threat.Risk)" "THREAT" "advanced_threat_detection.log"
+                $Global:AntivirusState.ThreatCount++
+                
+                if ($Config.AutoKillThreats) {
+                    Add-ThreatToResponseQueue -ThreatType $threat.Type -Details $threat -Severity $threat.Risk
+                }
+            }
+            
+            # Write detailed log
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\AdvancedThreatDetection_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logDir = Split-Path $logPath -Parent
+            if (!(Test-Path $logDir)) {
+                New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+            }
+            
+            $threats | ForEach-Object {
+                "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')|$($_.Type)|$($_.Risk)|$($_.Confidence)|$($_.DetectionMethods)|$($_.ProcessName -or $_.FileName -or 'N/A')|$($_.ProcessId -or 'N/A')" |
+                    Add-Content -Path $logPath -ErrorAction SilentlyContinue
+            }
+        }
+        
+    } catch {
+        Write-AVLog "System-wide advanced threat detection error: $_" "ERROR" "advanced_threat_detection.log"
+    }
+    
+    return $threats.Count
+}
+
 function Invoke-LOLBinDetection {
     $LOLBinPatterns = @{
         "certutil" = @{
@@ -1411,6 +1797,29 @@ function Invoke-AMSIBypassDetection {
 }
 
 function Invoke-CredentialDumpDetection {
+    # Credential dumping signatures for advanced detection
+    $credentialDumpSignatures = @{
+        "CredentialDumper" = @(
+            "mimikatz", "sekurlsa", "pwdump", "gsecdump", "wce", "procdump",
+            "dumpert", "nanodump", "lsassy", "lsadump", "cachedump",
+            "credential.*dump", "password.*dump", "hash.*dump"
+        )
+    }
+    
+    # Credential dumping behavioral patterns
+    $credentialDumpBehaviors = @{
+        "LSASSAccess" = @(
+            "lsass", "LSASS", "MiniDumpWriteDump", "CreateDump", "dmp.*lsass"
+        )
+        "RegistryDump" = @(
+            "reg.*save.*sam", "reg.*save.*security", "reg.*save.*system",
+            "reg.*export.*sam", "sam.*dump", "security.*dump"
+        )
+        "MemoryDump" = @(
+            "MiniDump", "CreateDump", "dump.*memory", "memory.*dump"
+        )
+    }
+    
     $CredentialTools = @("mimikatz", "sekurlsa", "pwdump", "gsecdump", "wce.exe", "procdump", "dumpert", "nanodump", "lsassy")
     $LSASSAccess = @("lsass", "LSASS")
     
@@ -1422,18 +1831,51 @@ function Invoke-CredentialDumpDetection {
         }
         
         foreach ($Proc in $AccessingProcesses) {
-            Write-AVLog "LSASS access detected - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Command: $($Proc.CommandLine)" "THREAT" "credential_dumping_detections.log"
+            # Use advanced detection framework
+            if ($Proc.ExecutablePath -and (Test-Path $Proc.ExecutablePath)) {
+                $detectionResult = Invoke-AdvancedThreatDetection `
+                    -FilePath $Proc.ExecutablePath `
+                    -FileSignatures $credentialDumpSignatures `
+                    -BehavioralIndicators $credentialDumpBehaviors `
+                    -CommandLine $Proc.CommandLine `
+                    -CheckEntropy $true
+                
+                if ($detectionResult.IsThreat) {
+                    Write-AVLog "LSASS access detected via Advanced Framework - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Methods: $($detectionResult.DetectionMethods -join ', ') | Confidence: $($detectionResult.Confidence)%" "THREAT" "credential_dumping_detections.log"
+                } else {
+                    Write-AVLog "LSASS access detected - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Command: $($Proc.CommandLine)" "THREAT" "credential_dumping_detections.log"
+                }
+            } else {
+                Write-AVLog "LSASS access detected - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Command: $($Proc.CommandLine)" "THREAT" "credential_dumping_detections.log"
+            }
             $Global:AntivirusState.ThreatCount++
             if ($Config.AutoKillThreats) { Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
         }
     }
     
-    # Detect credential dumping tools
+    # Detect credential dumping tools using advanced framework
     $AllProcesses = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue
     foreach ($Proc in $AllProcesses) {
         if ($Proc.ProcessId -eq $PID -or $Proc.ProcessId -eq $Script:SelfPID) { continue }
         
-        # Check process name and command line
+        # Use advanced detection framework
+        if ($Proc.ExecutablePath -and (Test-Path $Proc.ExecutablePath)) {
+            $detectionResult = Invoke-AdvancedThreatDetection `
+                -FilePath $Proc.ExecutablePath `
+                -FileSignatures $credentialDumpSignatures `
+                -BehavioralIndicators $credentialDumpBehaviors `
+                -CommandLine $Proc.CommandLine `
+                -CheckEntropy $true
+            
+            if ($detectionResult.IsThreat) {
+                Write-AVLog "Credential dumping tool detected via Advanced Framework - Tool: $($detectionResult.ThreatName) | Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Methods: $($detectionResult.DetectionMethods -join ', ') | Confidence: $($detectionResult.Confidence)%" "THREAT" "credential_dumping_detections.log"
+                $Global:AntivirusState.ThreatCount++
+                if ($Config.AutoKillThreats) { Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
+                continue
+            }
+        }
+        
+        # Legacy detection: Check process name and command line
         foreach ($Tool in $CredentialTools) {
             if ($Proc.Name -like "*$Tool*" -or $Proc.CommandLine -match $Tool) {
                 Write-AVLog "Credential dumping tool detected - Tool: $Tool | Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Command: $($Proc.CommandLine)" "THREAT" "credential_dumping_detections.log"
@@ -1778,6 +2220,25 @@ function Invoke-ProcessHollowingDetection {
     $detections = @()
     
     try {
+        # Process hollowing signatures for advanced detection
+        $processHollowingSignatures = @{
+            "ProcessHollowing" = @(
+                "process.*hollowing", "hollow.*process", "process.*replacement",
+                "unmap.*section", "ntunmapviewofsection"
+            )
+        }
+        
+        # Process hollowing behavioral patterns
+        $processHollowingBehaviors = @{
+            "HollowingAPIs" = @(
+                "NtUnmapViewOfSection", "VirtualAllocEx", "WriteProcessMemory",
+                "SetThreadContext", "ResumeThread", "process.*hollow"
+            )
+            "SuspiciousParent" = @(
+                "explorer.*spawn", "winlogon.*spawn", "suspicious.*parent"
+            )
+        }
+        
         $processes = Get-CimInstance Win32_Process | Select-Object ProcessId, Name, ExecutablePath, CommandLine, ParentProcessId, CreationDate
         
         foreach ($proc in $processes) {
@@ -1785,6 +2246,28 @@ function Invoke-ProcessHollowingDetection {
                 $procObj = Get-Process -Id $proc.ProcessId -ErrorAction Stop
                 $procPath = $procObj.Path
                 $imgPath = $proc.ExecutablePath
+                
+                # Use advanced detection framework
+                if ($procPath -and (Test-Path $procPath)) {
+                    $detectionResult = Invoke-AdvancedThreatDetection `
+                        -FilePath $procPath `
+                        -FileSignatures $processHollowingSignatures `
+                        -BehavioralIndicators $processHollowingBehaviors `
+                        -CommandLine $proc.CommandLine `
+                        -CheckEntropy $true
+                    
+                    if ($detectionResult.IsThreat) {
+                        $detections += @{
+                            ProcessId = $proc.ProcessId
+                            ProcessName = $proc.Name
+                            ThreatName = $detectionResult.ThreatName
+                            DetectionMethods = $detectionResult.DetectionMethods -join ", "
+                            Confidence = $detectionResult.Confidence
+                            Type = "Process Hollowing Detected via Advanced Framework"
+                            Risk = if ($detectionResult.Risk -eq "CRITICAL") { "Critical" } else { "High" }
+                        }
+                    }
+                }
                 
                 # Check for path mismatch (indicator of process hollowing)
                 if ($procPath -and $imgPath -and $procPath -ne $imgPath) {
@@ -1933,12 +2416,57 @@ function Invoke-KeyloggerDetection {
     $detections = @()
     
     try {
+        # Keylogger signatures for advanced detection
+        $keyloggerSignatures = @{
+            "Keylogger" = @(
+                "keylogger", "keylog", "keystroke", "keyboard.*hook", "key.*capture",
+                "SetWindowsHookEx", "WH_KEYBOARD", "WH_KEYBOARD_LL", "GetAsyncKeyState",
+                "keyboard.*monitor", "keystroke.*logger", "key.*recorder"
+            )
+        }
+        
+        # Keylogger behavioral patterns
+        $keyloggerBehaviors = @{
+            "KeyboardHooking" = @(
+                "SetWindowsHookEx", "WH_KEYBOARD", "WH_KEYBOARD_LL", "keyboard.*hook",
+                "GetAsyncKeyState", "GetKeyState", "keylog"
+            )
+            "KeyCapture" = @(
+                "keystroke", "key.*capture", "key.*record", "keyboard.*monitor"
+            )
+        }
+        
         # Check for processes with keyboard hooks
         $processes = Get-Process -ErrorAction SilentlyContinue
         
         foreach ($proc in $processes) {
             try {
-                # Check for processes using keyboard hook DLLs
+                $procPath = $proc.Path
+                if (-not $procPath -or -not (Test-Path $procPath)) { continue }
+                
+                $procCmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
+                
+                # Use advanced detection framework
+                $detectionResult = Invoke-AdvancedThreatDetection `
+                    -FilePath $procPath `
+                    -FileSignatures $keyloggerSignatures `
+                    -BehavioralIndicators $keyloggerBehaviors `
+                    -CommandLine $procCmdLine `
+                    -CheckEntropy $true
+                
+                if ($detectionResult.IsThreat) {
+                    $detections += @{
+                        ProcessId = $proc.Id
+                        ProcessName = $proc.ProcessName
+                        ThreatName = $detectionResult.ThreatName
+                        DetectionMethods = $detectionResult.DetectionMethods -join ", "
+                        Confidence = $detectionResult.Confidence
+                        Type = "Keylogger Detected via Advanced Framework"
+                        Risk = if ($detectionResult.Risk -eq "CRITICAL") { "Critical" } elseif ($detectionResult.Risk -eq "HIGH") { "High" } else { "Medium" }
+                    }
+                }
+                
+                # Legacy detection: Check for processes using keyboard hook DLLs
                 $modules = $proc.Modules | Where-Object {
                     $_.ModuleName -match 'user32|keylog|hook|kbhook|keyboard'
                 }
@@ -2132,13 +2660,54 @@ function Invoke-RansomwareDetection {
             }
         }
         
-        # Check for processes with high file I/O
+        # Ransomware signatures for advanced detection
+        $ransomwareSignatures = @{
+            "Ransomware" = @(
+                "ransomware", "encrypt", "decrypt", "bitcoin", "payment.*required",
+                "your.*files.*encrypted", "lock.*screen", "crypto.*locker", "file.*encryption"
+            )
+        }
+        
+        # Ransomware behavioral patterns
+        $ransomwareBehaviors = @{
+            "ShadowCopyDeletion" = @(
+                "vssadmin.*delete", "wbadmin.*delete", "shadowcopy.*delete",
+                "recoveryenabled.*no", "bcdedit.*recovery"
+            )
+            "FileEncryption" = @(
+                "encrypt.*file", "crypto.*api", "file.*lock", "ransom.*note"
+            )
+        }
+        
+        # Check for processes with high file I/O using advanced framework
         try {
-            $processes = Get-CimInstance Win32_Process | Select-Object ProcessId, Name, ExecutablePath
+            $processes = Get-CimInstance Win32_Process | Select-Object ProcessId, Name, ExecutablePath, CommandLine
             
             foreach ($proc in $processes) {
                 try {
                     $procObj = Get-Process -Id $proc.ProcessId -ErrorAction Stop
+                    
+                    # Use advanced detection framework
+                    if ($proc.ExecutablePath -and (Test-Path $proc.ExecutablePath)) {
+                        $detectionResult = Invoke-AdvancedThreatDetection `
+                            -FilePath $proc.ExecutablePath `
+                            -FileSignatures $ransomwareSignatures `
+                            -BehavioralIndicators $ransomwareBehaviors `
+                            -CommandLine $proc.CommandLine `
+                            -CheckEntropy $true
+                        
+                        if ($detectionResult.IsThreat) {
+                            $detections += @{
+                                ProcessId = $proc.ProcessId
+                                ProcessName = $proc.Name
+                                ThreatName = $detectionResult.ThreatName
+                                DetectionMethods = $detectionResult.DetectionMethods -join ", "
+                                Confidence = $detectionResult.Confidence
+                                Type = "Ransomware Detected via Advanced Framework"
+                                Risk = if ($detectionResult.Risk -eq "CRITICAL") { "Critical" } else { "High" }
+                            }
+                        }
+                    }
                     
                     # Check for processes with unusual file activity
                     $ioStats = Get-Counter "\Process($($proc.Name))\IO Data Operations/sec" -ErrorAction SilentlyContinue
@@ -3258,6 +3827,1475 @@ function Invoke-USBMonitoring {
     return $detections.Count
 }
 
+function Invoke-MobileDeviceMonitoring {
+    $detections = @()
+    $threats = @()
+    
+    try {
+        # Track known legitimate processes that may access mobile devices
+        $legitimateProcesses = @(
+            "iTunes.exe", "iCloud.exe", "AppleMobileDeviceService.exe", "AppleMobileDeviceHelper.exe",
+            "Samsung Smart Switch.exe", "Samsung SideSync.exe", "Samsung Kies.exe",
+            "adb.exe", "fastboot.exe", "AndroidFileTransfer.exe", "Android Studio.exe",
+            "explorer.exe", "dllhost.exe", "WUDFHost.exe", "WPDShextAutoplay.exe"
+        )
+        
+        # Suspicious processes that shouldn't access mobile devices
+        $suspiciousProcesses = @(
+            "powershell.exe", "cmd.exe", "wmic.exe", "wscript.exe", "cscript.exe",
+            "mshta.exe", "rundll32.exe", "regsvr32.exe", "certutil.exe", "bitsadmin.exe"
+        )
+        
+        # Method 1: Detect mobile devices via WPD (Windows Portable Devices)
+        try {
+            $wpDevices = Get-PnpDevice -Class "WPD" -Status "OK" -ErrorAction SilentlyContinue
+            $mtpDevices = Get-PnpDevice | Where-Object {
+                $_.FriendlyName -match "iPhone|iPad|Android|Samsung|Google|Pixel|OnePlus|Xiaomi|Huawei|LG|Motorola|Sony" -or
+                $_.Description -match "iPhone|iPad|Android|MTP|Portable Device"
+            }
+            
+            $mobileDevices = @()
+            if ($wpDevices) { $mobileDevices += $wpDevices }
+            if ($mtpDevices) { $mobileDevices += $mtpDevices }
+            
+            foreach ($device in $mobileDevices) {
+                $deviceName = $device.FriendlyName
+                $isIPhone = $deviceName -match "iPhone|iPad|Apple"
+                $isAndroid = $deviceName -match "Android|Samsung|Google|Pixel|OnePlus|Xiaomi|Huawei|LG|Motorola|Sony"
+                
+                if ($isIPhone -or $isAndroid) {
+                    Write-AVLog "Mobile device detected: $deviceName ($($device.InstanceId))" "INFO" "mobile_device_monitoring.log"
+                    
+                    # Check for processes accessing this device
+                    try {
+                        $deviceProcesses = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                            $_.CommandLine -match $device.InstanceId -or
+                            $_.ExecutablePath -match "WPD|PortableDevice|MTP"
+                        }
+                        
+                        foreach ($proc in $deviceProcesses) {
+                            $procName = Split-Path -Leaf $proc.ExecutablePath
+                            
+                            # Check if suspicious process is accessing device
+                            if ($suspiciousProcesses -contains $procName) {
+                                $threats += @{
+                                    Type = "Suspicious Process Accessing Mobile Device"
+                                    Device = $deviceName
+                                    Process = $procName
+                                    ProcessId = $proc.ProcessId
+                                    CommandLine = $proc.CommandLine
+                                    Risk = "CRITICAL"
+                                    Timestamp = Get-Date
+                                }
+                                
+                                # Attempt to terminate suspicious process
+                                if ($Config.AutoKillThreats) {
+                                    try {
+                                        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                                        Write-AVLog "Terminated suspicious process accessing mobile device: $procName (PID: $($proc.ProcessId))" "THREAT" "mobile_device_monitoring.log"
+                                    } catch {
+                                        Write-AVLog "Failed to terminate process ${procName}: $_" "WARN" "mobile_device_monitoring.log"
+                                    }
+                                }
+                            }
+                        }
+                    } catch { }
+                    
+                    # Log device connection
+                    $detections += @{
+                        DeviceName = $deviceName
+                        InstanceId = $device.InstanceId
+                        DeviceType = if ($isIPhone) { "iPhone/iPad" } else { "Android" }
+                        Type = "Mobile Device Connected"
+                        Risk = "Medium"
+                        Timestamp = Get-Date
+                    }
+                }
+            }
+        } catch {
+            Write-AVLog "WPD/MTP device detection error: $_" "WARN" "mobile_device_monitoring.log"
+        }
+        
+        # Method 2: Monitor ADB (Android Debug Bridge) connections
+        try {
+            $adbProcesses = Get-Process -Name "adb" -ErrorAction SilentlyContinue
+            
+            foreach ($adbProc in $adbProcesses) {
+                try {
+                    # Check ADB connections
+                    $adbConnections = & adb devices 2>$null
+                    if ($adbConnections -and $adbConnections.Count -gt 1) {
+                        $connectedDevices = ($adbConnections | Where-Object { $_ -match "device$" }).Count
+                        
+                        if ($connectedDevices -gt 0) {
+                            # Check if ADB is being used by suspicious process
+                            $parentProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($adbProc.Id)" -ErrorAction SilentlyContinue |
+                                Select-Object -ExpandProperty ParentProcessId -ErrorAction SilentlyContinue
+                            
+                            if ($parentProc) {
+                                $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $parentProc" -ErrorAction SilentlyContinue
+                                if ($parent) {
+                                    $parentName = Split-Path -Leaf $parent.ExecutablePath
+                                    
+                                    if ($suspiciousProcesses -contains $parentName -or 
+                                        $legitimateProcesses -notcontains $parentName) {
+                                        $threats += @{
+                                            Type = "Suspicious ADB Connection"
+                                            Process = $parentName
+                                            ProcessId = $parentProc
+                                            ConnectedDevices = $connectedDevices
+                                            Risk = "CRITICAL"
+                                            Timestamp = Get-Date
+                                        }
+                                        
+                                        if ($Config.AutoKillThreats) {
+                                            try {
+                                                Stop-Process -Id $adbProc.Id -Force -ErrorAction SilentlyContinue
+                                                Stop-Process -Id $parentProc -Force -ErrorAction SilentlyContinue
+                                                Write-AVLog "Terminated suspicious ADB connection: $parentName" "THREAT" "mobile_device_monitoring.log"
+                                            } catch { }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            $detections += @{
+                                Type = "ADB Connection Active"
+                                ConnectedDevices = $connectedDevices
+                                Risk = "High"
+                                Timestamp = Get-Date
+                            }
+                        }
+                    }
+                } catch {
+                    # ADB not in PATH or not accessible
+                }
+            }
+        } catch { }
+        
+        # Method 3: Monitor file system access to mobile device mount points
+        try {
+            $logicalDisks = Get-CimInstance Win32_LogicalDisk -ErrorAction SilentlyContinue | Where-Object {
+                $_.DriveType -eq 2 -or $_.Description -match "Removable|Portable"
+            }
+            
+            foreach ($disk in $logicalDisks) {
+                $drivePath = $disk.DeviceID
+                
+                # Check if this might be a mobile device mount
+                $volumeInfo = Get-Volume -DriveLetter $drivePath[0] -ErrorAction SilentlyContinue
+                if ($volumeInfo -and ($volumeInfo.FileSystemLabel -match "iPhone|Android|Samsung|Google" -or
+                    $volumeInfo.FileSystem -eq "FAT32")) {
+                    
+                    # Monitor for suspicious file access patterns
+                    try {
+                        $recentFiles = Get-ChildItem -Path $drivePath -Recurse -ErrorAction SilentlyContinue |
+                            Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-5) } |
+                            Select-Object -First 50
+                        
+                        # Check for sensitive file types being accessed
+                        $sensitiveExtensions = @(".db", ".sqlite", ".keychain", ".key", ".p12", ".pfx", ".crt", ".pem", ".jpg", ".png", ".mp4", ".mov")
+                        $sensitiveFiles = $recentFiles | Where-Object {
+                            $sensitiveExtensions -contains $_.Extension -or
+                            $_.Name -match "contacts|messages|photos|videos|backup|keychain|password|credential"
+                        }
+                        
+                        if ($sensitiveFiles.Count -gt 10) {
+                            $threats += @{
+                                Type = "Mass Access to Sensitive Mobile Device Files"
+                                Drive = $drivePath
+                                FileCount = $sensitiveFiles.Count
+                                Risk = "HIGH"
+                                Timestamp = Get-Date
+                            }
+                        }
+                    } catch { }
+                }
+            }
+        } catch { }
+        
+        # Method 4: Monitor network connections that might indicate mobile device tethering/access
+        try {
+            $networkConnections = Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object {
+                $_.State -eq "Established" -and
+                ($_.LocalPort -eq 5037 -or $_.LocalPort -eq 5555 -or $_.LocalPort -eq 62078) # ADB ports
+            }
+            
+            if ($networkConnections) {
+                foreach ($conn in $networkConnections) {
+                    $owningProc = Get-CimInstance Win32_Process -Filter "ProcessId = $($conn.OwningProcess)" -ErrorAction SilentlyContinue
+                    if ($owningProc) {
+                        $procName = Split-Path -Leaf $owningProc.ExecutablePath
+                        
+                        if ($suspiciousProcesses -contains $procName) {
+                            $threats += @{
+                                Type = "Suspicious Network Connection to Mobile Device Port"
+                                Process = $procName
+                                ProcessId = $conn.OwningProcess
+                                LocalPort = $conn.LocalPort
+                                RemoteAddress = $conn.RemoteAddress
+                                Risk = "CRITICAL"
+                                Timestamp = Get-Date
+                            }
+                        }
+                    }
+                }
+            }
+        } catch { }
+        
+        # Method 5: Check for unauthorized services accessing mobile devices
+        try {
+            $mobileServices = Get-Service -ErrorAction SilentlyContinue | Where-Object {
+                $_.DisplayName -match "Apple|Android|Mobile|WPD|Portable" -and
+                $_.Status -eq "Running"
+            }
+            
+            foreach ($svc in $mobileServices) {
+                try {
+                    $svcProcess = Get-CimInstance Win32_Service -Filter "Name = '$($svc.Name)'" -ErrorAction SilentlyContinue |
+                        Select-Object -ExpandProperty ProcessId -ErrorAction SilentlyContinue
+                    
+                    if ($svcProcess) {
+                        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $svcProcess" -ErrorAction SilentlyContinue
+                        if ($proc) {
+                            $procPath = $proc.ExecutablePath
+                            
+                            # Verify service executable signature
+                            try {
+                                $sig = Get-AuthenticodeSignature -FilePath $procPath -ErrorAction SilentlyContinue
+                                if ($sig.Status -ne "Valid" -and $sig.Status -ne "NotSigned") {
+                                    $threats += @{
+                                        Type = "Unauthorized Mobile Device Service"
+                                        Service = $svc.Name
+                                        ServicePath = $procPath
+                                        SignatureStatus = $sig.Status
+                                        Risk = "HIGH"
+                                        Timestamp = Get-Date
+                                    }
+                                }
+                            } catch { }
+                        }
+                    }
+                } catch { }
+            }
+        } catch { }
+        
+        # Method 6: Monitor registry for mobile device access patterns
+        try {
+            $mobileRegKeys = @(
+                "HKLM:\SYSTEM\CurrentControlSet\Enum\USB",
+                "HKLM:\SYSTEM\CurrentControlSet\Enum\WPD",
+                "HKLM:\SOFTWARE\Microsoft\Windows Portable Devices"
+            )
+            
+            foreach ($regKey in $mobileRegKeys) {
+                if (Test-Path $regKey) {
+                    try {
+                        $recentChanges = Get-ChildItem -Path $regKey -Recurse -ErrorAction SilentlyContinue |
+                            Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-10) }
+                        
+                        if ($recentChanges.Count -gt 20) {
+                            $detections += @{
+                                Type = "Excessive Mobile Device Registry Activity"
+                                RegistryPath = $regKey
+                                ChangeCount = $recentChanges.Count
+                                Risk = "Medium"
+                                Timestamp = Get-Date
+                            }
+                        }
+                    } catch { }
+                }
+            }
+        } catch { }
+        
+        # Method 7: Mobile Malware Detection (Banking Trojans, Spyware, etc.)
+        try {
+            # Known mobile malware families and banking trojans
+            $knownMalwareSignatures = @{
+                # Banking Trojans (Updated January 2026 - includes recent 2025-2026 threats)
+                "BankingTrojans" = @(
+                    # Recent Threats (2025-2026)
+                    "Anatsa", "RatOn", "Klopatra", "Sturnus", "Frogblight", "GodFather",
+                    # Established Threats
+                    "Anubis", "Cerberus", "EventBot", "Exobot", "FakeBank", "FakeSpy", "Faketoken",
+                    "Ginp", "Gustuff", "Hydra", "Marcher", "Medusa", "Octo", "Svpeng", "TinyBanker",
+                    "Tordow", "Triada", "TrickBot", "Ursnif", "Zeus", "Zitmo", "BankBot", "Asacub",
+                    "Acecard", "Cron", "MoqHao", "Regin", "SpyNote", "TeaBot",
+                    # Older Notable Threats
+                    "FluBot", "TinyBanker"
+                )
+                # Spyware and Data Stealers
+                "Spyware" = @(
+                    "Pegasus", "FinFisher", "HackingTeam", "FlexiSpy", "mSpy", "Spyera", "TheTruthSpy",
+                    "Cocospy", "Spyzie", "Spyic", "Spybubble", "SpyHuman", "SpyBubble", "SpyPhone",
+                    "MobileSpy", "StealthGenie", "Retina-X", "SpyToMobile", "SpyHuman"
+                )
+                # Ransomware
+                "MobileRansomware" = @(
+                    "Simplocker", "Koler", "Lockerpin", "Sypeng", "Fusob", "Jisut", "Charger",
+                    "Leatherlocker", "Slocker", "Pletor", "Congur", "Locker", "Ransom"
+                )
+                # Adware and Potentially Unwanted Programs
+                "Adware" = @(
+                    "Hummingbad", "Gooligan", "Judy", "Ewind", "Shedun", "Shuanet", "ShiftyBug",
+                    "Kemoge", "Mobidash", "Dowgin"
+                )
+                # Remote Access Trojans (RATs) - Mobile
+                "MobileRATs" = @(
+                    "RatOn", "Klopatra", "SpyNote", "AhMyth", "AndroRAT", "DroidJack", "SpyMax",
+                    "OmniRAT", "SpyAgent", "SpyAndroid", "Dendroid", "Sandroid", "SMSZombie"
+                )
+            }
+            
+            # Banking app package names (common targets)
+            $bankingAppPatterns = @(
+                "com.chase.sig.android", "com.wellsfargo.mobile", "com.bankofamerica.mobile",
+                "com.citi.citimobile", "com.usaa.mobile.android", "com.pnc.ecommerce.mobile",
+                "com.capitalone.mobile", "com.td", "com.rbc.mobile.android", "com.hsbc.hsbcusa.mobile.android",
+                "com.americanexpress.android.acctsvcs.us", "com.schwab.mobile", "com.fidelity.android",
+                "com.barclays.barclaysmobilebanking", "com.halifax.mobile", "com.natwest.mobile",
+                "com.hsbc.hsbcuk.mobilebanking", "com.santander.santander", "com.lloydsbank.mobile",
+                "com.rbs.mobile.android", "com.tsb.mobilebanking", "com.cooperativebank.business",
+                "com.ing.mobile", "com.rabobank.mobile", "com.abnamro.mobile", "com.deutschebank.mobile",
+                "com.commerzbank.mobile", "com.sparkasse", "com.volksbank", "com.postbank",
+                "com.unicredit.mobile", "com.intesasanpaolo.mobile", "com.bancoposta", "com.unicredit",
+                "com.bancoposta", "com.unicredit", "com.bancoposta", "com.unicredit"
+            )
+            
+            # Suspicious file patterns on mobile devices
+            $suspiciousFilePatterns = @(
+                "*.apk", "*.ipa", "*.dex", "*.so", "*.jar", "*.class"
+            )
+            
+            # Suspicious directory names where malware often hides
+            $suspiciousDirectories = @(
+                "Android/data", "Android/obb", "Android/system", "private/var", "Library/Caches",
+                "tmp", "temp", "cache", ".hidden", "system/bin", "system/xbin", "data/local"
+            )
+            
+            # Check connected mobile devices for malware indicators
+            $logicalDisks = Get-CimInstance Win32_LogicalDisk -ErrorAction SilentlyContinue | Where-Object {
+                $_.DriveType -eq 2 -or $_.Description -match "Removable|Portable"
+            }
+            
+            foreach ($disk in $logicalDisks) {
+                $drivePath = $disk.DeviceID
+                $volumeInfo = Get-Volume -DriveLetter $drivePath[0] -ErrorAction SilentlyContinue
+                
+                if ($volumeInfo -and ($volumeInfo.FileSystemLabel -match "iPhone|Android|Samsung|Google" -or
+                    $volumeInfo.FileSystem -eq "FAT32")) {
+                    
+                    try {
+                        # Scan for APK files (Android malware)
+                        $apkFiles = Get-ChildItem -Path $drivePath -Filter "*.apk" -Recurse -ErrorAction SilentlyContinue |
+                            Select-Object -First 100
+                        
+                        foreach ($apk in $apkFiles) {
+                            $fileName = $apk.Name
+                            $filePath = $apk.FullName
+                            
+                            # Check filename against known malware signatures
+                            $isMalware = $false
+                            $malwareFamily = "Unknown"
+                            
+                            foreach ($family in $knownMalwareSignatures.Keys) {
+                                foreach ($signature in $knownMalwareSignatures[$family]) {
+                                    if ($fileName -match $signature -or $filePath -match $signature) {
+                                        $isMalware = $true
+                                        $malwareFamily = "$family - $signature"
+                                        break
+                                    }
+                                }
+                                if ($isMalware) { break }
+                            }
+                            
+                            # Check for suspicious naming patterns (including recent 2025-2026 threat patterns)
+                            $suspiciousPatterns = @(
+                                "update", "service", "system", "security", "bank", "payment", "wallet",
+                                "installer", "helper", "manager", "optimizer", "cleaner", "booster",
+                                # Recent threat patterns (2025-2026)
+                                "mobdro", "iptv", "vpn", "tiktok.*adult", "pdf.*reader", "pdf.*viewer",
+                                "court", "case", "sms", "whatsapp.*backup", "telegram.*backup"
+                            )
+                            
+                            # Specific recent malware masquerading patterns
+                            $recentThreatPatterns = @{
+                                "Klopatra" = @("mobdro", "iptv.*vpn", "pirate.*tv", "streaming.*vpn")
+                                "RatOn" = @("tiktok.*adult", "nfc.*relay", "contactless")
+                                "Anatsa" = @("pdf.*app", "pdf.*reader", "document.*viewer")
+                                "Frogblight" = @("court.*case", "legal.*notice", "sms.*message")
+                                "Sturnus" = @("whatsapp", "telegram", "chat.*backup", "message.*backup")
+                                "GodFather" = @("virtual.*bank", "banking.*clone", "app.*clone")
+                            }
+                            
+                            $suspiciousName = $false
+                            $detectedThreatPattern = $null
+                            
+                            foreach ($pattern in $suspiciousPatterns) {
+                                if ($fileName -match $pattern -and $fileName.Length -lt 20) {
+                                    $suspiciousName = $true
+                                    break
+                                }
+                            }
+                            
+                            # Check for specific recent threat patterns
+                            foreach ($threatName in $recentThreatPatterns.Keys) {
+                                foreach ($pattern in $recentThreatPatterns[$threatName]) {
+                                    if ($fileName -match $pattern -or $filePath -match $pattern) {
+                                        $detectedThreatPattern = $threatName
+                                        $isMalware = $true
+                                        $malwareFamily = "BankingTrojans - $threatName"
+                                        break
+                                    }
+                                }
+                                if ($detectedThreatPattern) { break }
+                            }
+                            
+                            # Check file size (very small or very large APKs are suspicious)
+                            $fileSizeMB = $apk.Length / 1MB
+                            $suspiciousSize = $fileSizeMB -lt 0.1 -or $fileSizeMB -gt 100
+                            
+                            # Check for banking app targeting
+                            $targetsBanking = $false
+                            foreach ($bankApp in $bankingAppPatterns) {
+                                if ($filePath -match $bankApp -or $fileName -match "bank|payment|wallet|finance") {
+                                    $targetsBanking = $true
+                                    break
+                                }
+                            }
+                            
+                            if ($isMalware -or ($suspiciousName -and $suspiciousSize) -or $targetsBanking) {
+                                $riskLevel = if ($isMalware) { "CRITICAL" } 
+                                           elseif ($targetsBanking) { "CRITICAL" }
+                                           else { "HIGH" }
+                                
+                                $threats += @{
+                                    Type = if ($targetsBanking) { "Banking Trojan Detected on Mobile Device" } 
+                                          elseif ($isMalware) { "Mobile Malware Detected" }
+                                          else { "Suspicious Mobile App Detected" }
+                                    FilePath = $filePath
+                                    FileName = $fileName
+                                    FileSize = "$([Math]::Round($fileSizeMB, 2)) MB"
+                                    MalwareFamily = $malwareFamily
+                                    TargetsBanking = $targetsBanking
+                                    Risk = $riskLevel
+                                    Timestamp = Get-Date
+                                }
+                                
+                                # Attempt to quarantine the file
+                                if ($Config.AutoQuarantine -and $isMalware) {
+                                    try {
+                                        Move-ToQuarantine -FilePath $filePath -Reason "Mobile malware detected: $malwareFamily"
+                                        Write-AVLog "Quarantined mobile malware: $fileName ($malwareFamily)" "THREAT" "mobile_device_monitoring.log"
+                                    } catch {
+                                        Write-AVLog "Failed to quarantine ${fileName}: $_" "WARN" "mobile_device_monitoring.log"
+                                    }
+                                }
+                            }
+                        }
+                        
+                        # Check for suspicious directories
+                        foreach ($susDir in $suspiciousDirectories) {
+                            $fullPath = Join-Path $drivePath $susDir
+                            if (Test-Path $fullPath) {
+                                try {
+                                    $filesInDir = Get-ChildItem -Path $fullPath -Recurse -ErrorAction SilentlyContinue |
+                                        Where-Object { $_.Extension -match "\.(apk|ipa|dex|so|jar|class)$" }
+                                    
+                                    if ($filesInDir.Count -gt 5) {
+                                        $threats += @{
+                                            Type = "Suspicious Files in System Directory"
+                                            Directory = $fullPath
+                                            FileCount = $filesInDir.Count
+                                            Risk = "HIGH"
+                                            Timestamp = Get-Date
+                                        }
+                                    }
+                                } catch { }
+                            }
+                        }
+                        
+                        # Check for recently modified system files (potential root/jailbreak malware)
+                        try {
+                            $systemPaths = @(
+                                Join-Path $drivePath "Android\system",
+                                Join-Path $drivePath "Android\bin",
+                                Join-Path $drivePath "private\var"
+                            )
+                            
+                            foreach ($sysPath in $systemPaths) {
+                                if (Test-Path $sysPath) {
+                                    $recentMods = Get-ChildItem -Path $sysPath -Recurse -ErrorAction SilentlyContinue |
+                                        Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-24) }
+                                    
+                                    if ($recentMods.Count -gt 10) {
+                                        $threats += @{
+                                            Type = "Unauthorized System File Modifications on Mobile Device"
+                                            Path = $sysPath
+                                            ModifiedFiles = $recentMods.Count
+                                            Risk = "CRITICAL"
+                                            Timestamp = Get-Date
+                                        }
+                                    }
+                                }
+                            }
+                        } catch { }
+                        
+                        # Check for Sturnus-like behavior: Access to WhatsApp/Telegram chat databases
+                        try {
+                            $chatAppPaths = @(
+                                Join-Path $drivePath "Android\data\com.whatsapp",
+                                Join-Path $drivePath "Android\data\org.telegram",
+                                Join-Path $drivePath "Android\data\com.telegram"
+                            )
+                            
+                            foreach ($chatPath in $chatAppPaths) {
+                                if (Test-Path $chatPath) {
+                                    # Check for recent access to chat databases
+                                    $chatDbs = Get-ChildItem -Path $chatPath -Recurse -Filter "*.db" -ErrorAction SilentlyContinue |
+                                        Where-Object { $_.LastAccessTime -gt (Get-Date).AddHours(-1) }
+                                    
+                                    if ($chatDbs.Count -gt 0) {
+                                        $threats += @{
+                                            Type = "Suspicious Access to Chat Application Data (Sturnus-like behavior)"
+                                            Path = $chatPath
+                                            DatabaseFiles = $chatDbs.Count
+                                            Risk = "HIGH"
+                                            Timestamp = Get-Date
+                                        }
+                                    }
+                                }
+                            }
+                        } catch { }
+                        
+                        # Check for RatOn-like behavior: NFC-related files or configurations
+                        try {
+                            $nfcPaths = @(
+                                Join-Path $drivePath "Android\data\*nfc*",
+                                Join-Path $drivePath "Android\system\*nfc*"
+                            )
+                            
+                            foreach ($nfcPattern in $nfcPaths) {
+                                $nfcFiles = Get-ChildItem -Path (Split-Path $nfcPattern -Parent) -Filter (Split-Path $nfcPattern -Leaf) -Recurse -ErrorAction SilentlyContinue |
+                                    Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-24) }
+                                
+                                if ($nfcFiles.Count -gt 0) {
+                                    $threats += @{
+                                        Type = "Suspicious NFC-Related Files Detected (RatOn-like behavior)"
+                                        Path = $nfcPattern
+                                        FileCount = $nfcFiles.Count
+                                        Risk = "HIGH"
+                                        Timestamp = Get-Date
+                                    }
+                                }
+                            }
+                        } catch { }
+                        
+                    } catch {
+                        Write-AVLog "Error scanning mobile device for malware: $_" "WARN" "mobile_device_monitoring.log"
+                    }
+                }
+            }
+            
+            # Method 8: Monitor for banking app data exfiltration patterns
+            try {
+                # Check for processes accessing banking-related files
+                $bankingKeywords = @("bank", "payment", "wallet", "credit", "debit", "account", "transaction", "balance")
+                $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+                
+                foreach ($proc in $processes) {
+                    try {
+                        $cmdLine = $proc.CommandLine
+                        $procName = Split-Path -Leaf $proc.ExecutablePath
+                        
+                        if ($cmdLine) {
+                            $matchesBanking = $false
+                            foreach ($keyword in $bankingKeywords) {
+                                if ($cmdLine -match $keyword) {
+                                    $matchesBanking = $true
+                                    break
+                                }
+                            }
+                            
+                            if ($matchesBanking -and $suspiciousProcesses -contains $procName) {
+                                $threats += @{
+                                    Type = "Suspicious Process Accessing Banking-Related Data"
+                                    Process = $procName
+                                    ProcessId = $proc.ProcessId
+                                    CommandLine = $cmdLine
+                                    Risk = "CRITICAL"
+                                    Timestamp = Get-Date
+                                }
+                                
+                                if ($Config.AutoKillThreats) {
+                                    try {
+                                        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                                        Write-AVLog "Terminated process accessing banking data: $procName" "THREAT" "mobile_device_monitoring.log"
+                                    } catch { }
+                                }
+                            }
+                        }
+                    } catch { }
+                }
+            } catch { }
+            
+        } catch {
+            Write-AVLog "Mobile malware detection error: $_" "ERROR" "mobile_device_monitoring.log"
+        }
+        
+        # Log all detections and threats
+        if ($detections.Count -gt 0 -or $threats.Count -gt 0) {
+            foreach ($detection in $detections) {
+                Write-AVLog "MOBILE DEVICE MONITORING: $($detection.Type) - $($detection.DeviceName -or $detection.Drive -or 'System')" "INFO" "mobile_device_monitoring.log"
+            }
+            
+            foreach ($threat in $threats) {
+                Write-AVLog "MOBILE DEVICE THREAT: $($threat.Type) - $($threat.Process -or $threat.Service -or 'Unknown') - Risk: $($threat.Risk)" "THREAT" "mobile_device_monitoring.log"
+                $Global:AntivirusState.ThreatCount++
+                
+                # Add to response queue for automated response
+                if ($Config.AutoKillThreats) {
+                    Add-ThreatToResponseQueue -ThreatType $threat.Type -Details $threat -Severity $threat.Risk
+                }
+            }
+            
+            # Write detailed log
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\MobileDeviceMonitoring_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logDir = Split-Path $logPath -Parent
+            if (!(Test-Path $logDir)) {
+                New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+            }
+            
+            $allEvents = $detections + $threats
+            $allEvents | ForEach-Object {
+                $eventType = if ($_.Risk -match "CRITICAL|HIGH") { "THREAT" } else { "INFO" }
+                "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')|$eventType|$($_.Type)|$($_.Risk)|$($_.DeviceName -or $_.Process -or $_.Service -or 'N/A')|$($_.ProcessId -or 'N/A')" |
+                    Add-Content -Path $logPath -ErrorAction SilentlyContinue
+            }
+        }
+        
+    } catch {
+        Write-AVLog "Mobile device monitoring error: $_" "ERROR" "mobile_device_monitoring.log"
+    }
+    
+    return ($detections.Count + $threats.Count)
+}
+
+function Invoke-AttackToolsDetection {
+    $detections = @()
+    $threats = @()
+    
+    try {
+        # Comprehensive list of attack tools commonly found on dark web
+        $attackTools = @{
+            # Password Cracking Tools
+            "PasswordCrackers" = @(
+                "hydra", "hydra.exe", "hydra64.exe", "hydra32.exe",
+                "john", "john.exe", "john-the-ripper", "jtr",
+                "hashcat", "hashcat.exe", "hashcat64.exe",
+                "medusa", "medusa.exe", "ncrack", "ncrack.exe",
+                "patator", "patator.py", "brutus", "brutus.exe",
+                "rainbowcrack", "rcrack", "ophcrack", "ophcrack.exe",
+                "cain", "cain.exe", "abel.exe", "l0phtcrack"
+            )
+            # Exploitation Frameworks
+            "ExploitationFrameworks" = @(
+                "metasploit", "msfconsole", "msfvenom", "msfpayload",
+                "cobaltstrike", "beacon.exe", "cobaltstrike.exe",
+                "empire", "empire.exe", "powershell-empire",
+                "covenant", "covenant.exe", "grunt.exe",
+                "sliver", "sliver.exe", "merlin", "merlin.exe",
+                "havoc", "havoc.exe", "bruteratel", "bruteratel.exe"
+            )
+            # Network Scanning & Reconnaissance
+            "NetworkScanners" = @(
+                "nmap", "nmap.exe", "zenmap", "zenmap.exe",
+                "masscan", "masscan.exe", "zmap", "zmap.exe",
+                "angryip", "angryip.exe", "advanced-port-scanner",
+                "netscan", "netscan.exe", "lanmap", "lanmap.exe",
+                "superscan", "superscan.exe", "netcat", "nc.exe",
+                "socat", "socat.exe", "hping", "hping3.exe"
+            )
+            # Credential Dumping & Extraction
+            "CredentialDumpers" = @(
+                "mimikatz", "mimikatz.exe", "mimidrv.sys",
+                "lazagne", "lazagne.exe", "laZagne.exe",
+                "wce", "wce.exe", "wce32.exe", "wce64.exe",
+                "fgdump", "fgdump.exe", "pwdump", "pwdump.exe",
+                "gsecdump", "gsecdump.exe", "cachedump", "cachedump.exe",
+                "lsadump", "lsadump.exe", "sekurlsa", "sekurlsa.exe",
+                "procdump", "procdump.exe", "comsvcs.dll"
+            )
+            # Post-Exploitation & Lateral Movement
+            "PostExploitation" = @(
+                "bloodhound", "bloodhound.exe", "sharphound", "sharphound.exe",
+                "powersploit", "invoke-mimikatz", "invoke-kerberoast",
+                "empire", "empire.exe", "nishang", "nishang.ps1",
+                "impacket", "secretsdump.py", "psexec.py", "smbexec.py",
+                "crackmapexec", "crackmapexec.exe", "smbmap", "smbmap.exe",
+                "evil-winrm", "evil-winrm.exe", "winrm", "winrm.exe"
+            )
+            # Web Application Attack Tools
+            "WebAttackTools" = @(
+                "sqlmap", "sqlmap.py", "burpsuite", "burp.exe",
+                "nikto", "nikto.pl", "nikto.exe", "w3af",
+                "wpscan", "wpscan.rb", "acunetix", "acunetix.exe",
+                "appscan", "appscan.exe", "zap", "zap.exe",
+                "dirb", "dirb.exe", "dirbuster", "dirbuster.exe",
+                "gobuster", "gobuster.exe", "ffuf", "ffuf.exe"
+            )
+            # Packet Crafting & Network Tools
+            "PacketCrafting" = @(
+                "scapy", "scapy.py", "ettercap", "ettercap.exe",
+                "wireshark", "wireshark.exe", "tshark", "tshark.exe",
+                "tcpdump", "tcpdump.exe", "packeth", "packeth.exe",
+                "packetbuilder", "packetbuilder.exe", "nemesis", "nemesis.exe",
+                "hping", "hping3.exe", "yersinia", "yersinia.exe"
+            )
+            # RATs & Remote Access Tools
+            "RemoteAccessTools" = @(
+                "teamviewer", "teamviewer.exe", "anydesk", "anydesk.exe",
+                "ultravnc", "ultravnc.exe", "tightvnc", "tightvnc.exe",
+                "remmina", "remmina.exe", "remotex", "remotex.exe",
+                "radmin", "radmin.exe", "logmein", "logmein.exe",
+                "gotomypc", "gotomypc.exe", "ammyy", "ammyy.exe",
+                "darkcomet", "darkcomet.exe", "poisonivy", "poisonivy.exe"
+            )
+            # Keyloggers & Monitoring
+            "Keyloggers" = @(
+                "keylogger", "keylogger.exe", "refog", "refog.exe",
+                "spytech", "spytech.exe", "perfectkeylogger", "perfectkeylogger.exe",
+                "allinonekeylogger", "allinonekeylogger.exe", "actualkeylogger",
+                "actualkeylogger.exe", "keystrokecapture", "keystrokecapture.exe"
+            )
+            # File Transfer & Exfiltration
+            "FileTransferTools" = @(
+                "filezilla", "filezilla.exe", "winscp", "winscp.exe",
+                "pscp", "pscp.exe", "scp", "scp.exe", "sftp", "sftp.exe",
+                "curl", "curl.exe", "wget", "wget.exe", "aria2c", "aria2c.exe",
+                "certutil", "certutil.exe", "bitsadmin", "bitsadmin.exe"
+            )
+            # Rootkits & Stealth Tools
+            "Rootkits" = @(
+                "fu", "fu.exe", "hackerdefender", "hackerdefender.exe",
+                "afrootkit", "afrootkit.exe", "vanquish", "vanquish.exe",
+                "adore", "adore-ng", "diamorphine", "enyelkm"
+            )
+            # Cryptocurrency Miners (often bundled with malware)
+            "CryptoMiners" = @(
+                "xmrig", "xmrig.exe", "ccminer", "ccminer.exe",
+                "cgminer", "cgminer.exe", "minerd", "minerd.exe",
+                "nicehash", "nicehash.exe", "claymore", "claymore.exe"
+            )
+        }
+        
+        # Known SHA256 hashes of attack tools (resistant to renaming)
+        # Note: These are example hashes - in production, maintain a comprehensive database
+        $knownToolHashes = @{
+            # Hydra common versions (example patterns - update with real hashes)
+            "Hydra" = @(
+                # Add known Hydra hashes here when available
+            )
+            # Mimikatz common versions
+            "Mimikatz" = @(
+                # Add known Mimikatz hashes here
+            )
+            # Metasploit payloads
+            "Metasploit" = @(
+                # Add known Metasploit payload hashes
+            )
+        }
+        
+        # File signature patterns (YARA-like string detection - works even if renamed)
+        $toolSignatures = @{
+            # Hydra signatures
+            "Hydra" = @(
+                "THC Hydra", "hydra\.conf", "hydra\.restore", "Parallelized login cracker",
+                "Supported services:", "hydra -l", "hydra -P", "hydra -L", "hydra -p"
+            )
+            # Mimikatz signatures
+            "Mimikatz" = @(
+                "mimikatz", "mimilib\.dll", "sekurlsa", "kerberos", "wdigest",
+                "lsadump", "token::elevate", "privilege::debug", "Benjamin DELPY"
+            )
+            # Metasploit signatures
+            "Metasploit" = @(
+                "metasploit", "msfconsole", "msfvenom", "payload", "exploit",
+                "Rapid7", "Metasploit Framework", "msfpayload"
+            )
+            # Cobalt Strike signatures
+            "CobaltStrike" = @(
+                "cobaltstrike", "beacon\.dll", "beacon\.exe", "ReflectiveLoader",
+                "sleep_mask", "beacon\.stage", "Cobalt Strike"
+            )
+            # John the Ripper signatures
+            "JohnTheRipper" = @(
+                "John the Ripper", "jumbo", "john\.conf", "john\.pot", "wordlist",
+                "cracking", "john --wordlist", "john --rules"
+            )
+            # Hashcat signatures
+            "Hashcat" = @(
+                "hashcat", "hashcat\.exe", "hash modes", "attack modes",
+                "hashcat\.potfile", "hashcat --force"
+            )
+            # Nmap signatures
+            "Nmap" = @(
+                "Nmap", "Network Mapper", "nmap\.exe", "nmap\.conf", "nmap\.nse",
+                "Starting Nmap", "Nmap scan report"
+            )
+            # BloodHound signatures
+            "BloodHound" = @(
+                "bloodhound", "BloodHound\.exe", "SharpHound", "BloodHound\.db",
+                "neo4j", "BloodHound\.exe"
+            )
+            # Empire signatures
+            "Empire" = @(
+                "empire", "Empire\.exe", "empire\.db", "stagers", "listeners",
+                "PowerShell Empire"
+            )
+            # LaZagne signatures
+            "LaZagne" = @(
+                "laZagne", "LaZagne", "lazagne\.exe", "password recovery",
+                "browsers", "wifi", "mails"
+            )
+        }
+        
+        # Behavioral indicators (what tools DO, not what they're named)
+        $behavioralIndicators = @{
+            # Password cracking behaviors
+            "PasswordCracking" = @{
+                "NetworkPatterns" = @(
+                    "Multiple failed login attempts", "Brute force patterns",
+                    "Dictionary attack", "Credential stuffing"
+                )
+                "APICalls" = @(
+                    "LogonUser", "CredUIPromptForCredentials", "WNetAddConnection2"
+                )
+                "FileOperations" = @(
+                    "Reading wordlists", "Writing password files", "Hash files"
+                )
+            }
+            # Credential dumping behaviors
+            "CredentialDumping" = @{
+                "APICalls" = @(
+                    "LsaEnumerateLogonSessions", "LsaGetLogonSessionData",
+                    "MiniDumpWriteDump", "ReadProcessMemory", "OpenProcess",
+                    "CryptUnprotectData", "CredEnumerate"
+                )
+                "RegistryAccess" = @(
+                    "HKLM\SAM", "HKLM\SECURITY", "HKLM\SYSTEM",
+                    "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+                )
+                "ProcessAccess" = @(
+                    "Accessing lsass.exe", "Accessing winlogon.exe", "Accessing csrss.exe"
+                )
+            }
+            # Network scanning behaviors
+            "NetworkScanning" = @{
+                "NetworkPatterns" = @(
+                    "Rapid port connections", "ICMP sweeps", "SYN scans",
+                    "Multiple connection attempts", "ARP scanning"
+                )
+                "APICalls" = @(
+                    "connect", "WSAConnect", "send", "recv", "gethostbyname"
+                )
+            }
+            # Post-exploitation behaviors
+            "PostExploitation" = @{
+                "APICalls" = @(
+                    "CreateRemoteThread", "WriteProcessMemory", "VirtualAllocEx",
+                    "NtQuerySystemInformation", "NetUserEnum", "NetLocalGroupEnum"
+                )
+                "NetworkPatterns" = @(
+                    "SMB enumeration", "LDAP queries", "Kerberos ticket requests"
+                )
+                "FileOperations" = @(
+                    "Reading AD data", "Dumping credentials", "Extracting tokens"
+                )
+            }
+        }
+        
+        # Suspicious directory patterns where attack tools are often stored
+        $suspiciousDirectories = @(
+            "$env:USERPROFILE\Desktop\Tools",
+            "$env:USERPROFILE\Downloads\Hacking",
+            "$env:USERPROFILE\Documents\Tools",
+            "$env:USERPROFILE\Desktop\Hack",
+            "$env:TEMP\Tools",
+            "$env:ProgramData\Tools",
+            "C:\Tools",
+            "C:\Hacking",
+            "C:\Pentest",
+            "C:\Security"
+        )
+        
+        # Method 1: Scan running processes for attack tools
+        try {
+            $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+            
+            foreach ($proc in $processes) {
+                try {
+                    $procPath = $proc.ExecutablePath
+                    $procName = Split-Path -Leaf $procPath -ErrorAction SilentlyContinue
+                    $procCmdLine = $proc.CommandLine
+                    
+                    if (-not $procName) { continue }
+                    
+                    $detectedTool = $null
+                    $toolCategory = $null
+                    $detectionMethod = "NameMatch"
+                    
+                    # Method 1A: Check process name and path against attack tools
+                    foreach ($category in $attackTools.Keys) {
+                        foreach ($tool in $attackTools[$category]) {
+                            if ($procName -match $tool -or $procPath -match $tool -or $procCmdLine -match $tool) {
+                                $detectedTool = $tool
+                                $toolCategory = $category
+                                $detectionMethod = "NameMatch"
+                                break
+                            }
+                        }
+                        if ($detectedTool) { break }
+                    }
+                    
+                    # Method 1B: Hash-based detection (works even if renamed)
+                    if (-not $detectedTool -and $procPath -and (Test-Path $procPath)) {
+                        try {
+                            $fileHash = (Get-FileHash -Path $procPath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                            
+                            foreach ($toolName in $knownToolHashes.Keys) {
+                                if ($knownToolHashes[$toolName] -contains $fileHash) {
+                                    $detectedTool = $toolName
+                                    $toolCategory = "Unknown"
+                                    $detectionMethod = "HashMatch"
+                                    break
+                                }
+                            }
+                        } catch { }
+                    }
+                    
+                    # Method 1C: File signature/string pattern detection (YARA-like)
+                    if (-not $detectedTool -and $procPath -and (Test-Path $procPath)) {
+                        try {
+                            # Read first 1MB of file for signature scanning
+                            $fileBytes = [System.IO.File]::ReadAllBytes($procPath)
+                            $fileContent = [System.Text.Encoding]::ASCII.GetString($fileBytes[0..[Math]::Min(1048576, $fileBytes.Length-1)])
+                            
+                            foreach ($toolName in $toolSignatures.Keys) {
+                                foreach ($signature in $toolSignatures[$toolName]) {
+                                    if ($fileContent -match [regex]::Escape($signature) -or 
+                                        $procCmdLine -match [regex]::Escape($signature)) {
+                                        $detectedTool = $toolName
+                                        $toolCategory = "Unknown"
+                                        $detectionMethod = "SignatureMatch"
+                                        break
+                                    }
+                                }
+                                if ($detectedTool) { break }
+                            }
+                        } catch { }
+                    }
+                    
+                    # Method 1D: Entropy analysis (packed/obfuscated tools have high entropy)
+                    if (-not $detectedTool -and $procPath -and (Test-Path $procPath)) {
+                        try {
+                            $entropy = Measure-FileEntropy -FilePath $procPath
+                            if ($entropy -gt 7.5 -and (Get-Item $procPath).Length -lt 10MB) {
+                                # High entropy + small size = possibly packed/obfuscated
+                                # Check if unsigned
+                                $sig = Get-AuthenticodeSignature -FilePath $procPath -ErrorAction SilentlyContinue
+                                if ($sig.Status -ne "Valid") {
+                                    # Check command line for suspicious patterns
+                                    if ($procCmdLine -match "password|brute|crack|hash|dump|scan|exploit") {
+                                        $detectedTool = "SuspiciousPackedTool"
+                                        $toolCategory = "Unknown"
+                                        $detectionMethod = "EntropyAnalysis"
+                                    }
+                                }
+                            }
+                        } catch { }
+                    }
+                    
+                    if ($detectedTool) {
+                        # Check if it's a legitimate security tool in a known location
+                        $isLegitimate = $false
+                        $legitimatePaths = @(
+                            "$env:ProgramFiles", "$env:ProgramFiles(x86)", 
+                            "$env:ProgramData\Microsoft", "$env:SystemRoot\System32"
+                        )
+                        
+                        foreach ($legPath in $legitimatePaths) {
+                            if ($procPath -like "$legPath*") {
+                                # Still suspicious but might be legitimate software
+                                $isLegitimate = $true
+                                break
+                            }
+                        }
+                        
+                        $riskLevel = if ($isLegitimate) { "MEDIUM" } else { "CRITICAL" }
+                        
+                        $threats += @{
+                            Type = "Attack Tool Detected: $toolCategory"
+                            ToolName = $detectedTool
+                            ProcessName = $procName
+                            ProcessPath = $procPath
+                            ProcessId = $proc.ProcessId
+                            CommandLine = $procCmdLine
+                            Category = $toolCategory
+                            DetectionMethod = $detectionMethod
+                            Risk = $riskLevel
+                            Timestamp = Get-Date
+                        }
+                        
+                        # Attempt to terminate if critical
+                        if ($Config.AutoKillThreats -and $riskLevel -eq "CRITICAL") {
+                            try {
+                                Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                                Write-AVLog "Terminated attack tool process: $procName ($detectedTool)" "THREAT" "attack_tools_detection.log"
+                            } catch {
+                                Write-AVLog "Failed to terminate ${procName}: $_" "WARN" "attack_tools_detection.log"
+                            }
+                        }
+                    }
+                } catch { }
+            }
+        } catch {
+            Write-AVLog "Process scanning error in attack tools detection: $_" "WARN" "attack_tools_detection.log"
+        }
+        
+        # Method 2: Scan file system for attack tools
+        try {
+            $scanPaths = @(
+                $env:USERPROFILE,
+                $env:TEMP,
+                $env:ProgramData,
+                "C:\Tools",
+                "C:\Hacking",
+                "C:\Pentest"
+            )
+            
+            foreach ($scanPath in $scanPaths) {
+                if (-not (Test-Path $scanPath)) { continue }
+                
+                try {
+                    # Search for executable files matching attack tool names
+                    foreach ($category in $attackTools.Keys) {
+                        foreach ($tool in $attackTools[$category]) {
+                            $toolPattern = "*$tool*"
+                            
+                            try {
+                                $foundFiles = Get-ChildItem -Path $scanPath -Filter $toolPattern -Recurse -ErrorAction SilentlyContinue |
+                                    Where-Object { $_.Extension -match "\.(exe|dll|bat|cmd|ps1|py|rb|pl)$" } |
+                                    Select-Object -First 10
+                                
+                                foreach ($file in $foundFiles) {
+                                    # Check file signature
+                                    $isSigned = $false
+                                    try {
+                                        $sig = Get-AuthenticodeSignature -FilePath $file.FullName -ErrorAction SilentlyContinue
+                                        $isSigned = $sig.Status -eq "Valid"
+                                    } catch { }
+                                    
+                                    if (-not $isSigned) {
+                                        $threats += @{
+                                            Type = "Attack Tool File Detected: $toolCategory"
+                                            ToolName = $tool
+                                            FilePath = $file.FullName
+                                            FileName = $file.Name
+                                            FileSize = "$([Math]::Round($file.Length / 1MB, 2)) MB"
+                                            Category = $category
+                                            IsSigned = $isSigned
+                                            Risk = "HIGH"
+                                            Timestamp = Get-Date
+                                        }
+                                        
+                                        # Quarantine unsigned attack tools
+                                        if ($Config.AutoQuarantine) {
+                                            try {
+                                                Move-ToQuarantine -FilePath $file.FullName -Reason "Attack tool detected: $tool ($category)"
+                                                Write-AVLog "Quarantined attack tool: $($file.Name) ($tool)" "THREAT" "attack_tools_detection.log"
+                                            } catch {
+                                                Write-AVLog "Failed to quarantine $($file.Name): $_" "WARN" "attack_tools_detection.log"
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch { }
+                        }
+                    }
+                } catch { }
+            }
+        } catch {
+            Write-AVLog "File system scanning error: $_" "WARN" "attack_tools_detection.log"
+        }
+        
+        # Method 3: Check suspicious directories
+        try {
+            foreach ($susDir in $suspiciousDirectories) {
+                if (Test-Path $susDir) {
+                    try {
+                        $exeFiles = Get-ChildItem -Path $susDir -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue |
+                            Select-Object -First 20
+                        
+                        if ($exeFiles.Count -gt 5) {
+                            $detections += @{
+                                Type = "Suspicious Directory with Multiple Executables"
+                                Directory = $susDir
+                                ExecutableCount = $exeFiles.Count
+                                Risk = "MEDIUM"
+                                Timestamp = Get-Date
+                            }
+                        }
+                    } catch { }
+                }
+            }
+        } catch { }
+        
+        # Method 4: Monitor for brute force attack patterns (Hydra, Medusa behavior)
+        try {
+            $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+            
+            foreach ($proc in $processes) {
+                try {
+                    $cmdLine = $proc.CommandLine
+                    if (-not $cmdLine) { continue }
+                    
+                    # Check for brute force attack patterns
+                    $bruteForcePatterns = @(
+                        "-l.*-P", "-L.*-P", "-u.*-p", "-U.*-P",  # Hydra patterns
+                        "--wordlist", "--password", "--user",     # Medusa patterns
+                        "brute", "crack", "dictionary", "wordlist"
+                    )
+                    
+                    $isBruteForce = $false
+                    foreach ($pattern in $bruteForcePatterns) {
+                        if ($cmdLine -match $pattern) {
+                            $isBruteForce = $true
+                            break
+                        }
+                    }
+                    
+                    if ($isBruteForce) {
+                        $procName = Split-Path -Leaf $proc.ExecutablePath -ErrorAction SilentlyContinue
+                        
+                        $threats += @{
+                            Type = "Brute Force Attack Tool Activity Detected"
+                            ProcessName = $procName
+                            ProcessId = $proc.ProcessId
+                            CommandLine = $cmdLine
+                            Risk = "CRITICAL"
+                            Timestamp = Get-Date
+                        }
+                        
+                        if ($Config.AutoKillThreats) {
+                            try {
+                                Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                                Write-AVLog "Terminated brute force attack: $procName" "THREAT" "attack_tools_detection.log"
+                            } catch { }
+                        }
+                    }
+                } catch { }
+            }
+        } catch { }
+        
+        # Method 5: Check for network scanning activity (Nmap, Masscan patterns)
+        try {
+            $networkConnections = Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object {
+                $_.State -eq "Established" -or $_.State -eq "Listen"
+            }
+            
+            # Look for processes making many connections (port scanning behavior)
+            $connectionCounts = $networkConnections | Group-Object -Property OwningProcess
+            
+            foreach ($connGroup in $connectionCounts) {
+                if ($connGroup.Count -gt 50) {  # Suspicious number of connections
+                    try {
+                        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $($connGroup.Name)" -ErrorAction SilentlyContinue
+                        if ($proc) {
+                            $procName = Split-Path -Leaf $proc.ExecutablePath -ErrorAction SilentlyContinue
+                            
+                            # Check if it's a known scanning tool
+                            $isScanner = $false
+                            foreach ($scanner in $attackTools["NetworkScanners"]) {
+                                if ($procName -match $scanner -or $proc.ExecutablePath -match $scanner) {
+                                    $isScanner = $true
+                                    break
+                                }
+                            }
+                            
+                            if ($isScanner) {
+                                $threats += @{
+                                    Type = "Network Scanning Tool Detected"
+                                    ProcessName = $procName
+                                    ProcessId = $connGroup.Name
+                                    ConnectionCount = $connGroup.Count
+                                    Risk = "HIGH"
+                                    Timestamp = Get-Date
+                                }
+                            }
+                        }
+                    } catch { }
+                }
+            }
+        } catch { }
+        
+        # Method 6: Behavioral Detection - Credential Dumping Indicators
+        try {
+            $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+            
+            foreach ($proc in $processes) {
+                try {
+                    $procPath = $proc.ExecutablePath
+                    $procName = Split-Path -Leaf $procPath -ErrorAction SilentlyContinue
+                    $procId = $proc.ProcessId
+                    
+                    if (-not $procPath -or -not (Test-Path $procPath)) { continue }
+                    
+                    # Check for processes accessing LSASS (credential dumping behavior)
+                    try {
+                        $lsassProcess = Get-Process -Name "lsass" -ErrorAction SilentlyContinue
+                        if ($lsassProcess) {
+                            # Check if this process has handles to lsass
+                            $handles = Get-CimInstance Win32_ProcessHandle -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+                            if ($handles) {
+                                foreach ($handle in $handles) {
+                                    if ($handle.TargetProcessId -eq $lsassProcess.Id) {
+                                        # Check if it's a legitimate process
+                                        $legitimateProcs = @("svchost", "dllhost", "taskhost", "explorer")
+                                        $isLegit = $false
+                                        foreach ($legit in $legitimateProcs) {
+                                            if ($procName -match $legit) {
+                                                $isLegit = $true
+                                                break
+                                            }
+                                        }
+                                        
+                                        if (-not $isLegit) {
+                                            $threats += @{
+                                                Type = "Credential Dumping Behavior Detected (LSASS Access)"
+                                                ProcessName = $procName
+                                                ProcessPath = $procPath
+                                                ProcessId = $procId
+                                                Behavior = "Accessing LSASS process"
+                                                Risk = "CRITICAL"
+                                                Timestamp = Get-Date
+                                            }
+                                            
+                                            if ($Config.AutoKillThreats) {
+                                                try {
+                                                    Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+                                                    Write-AVLog "Terminated credential dumping process: $procName" "THREAT" "attack_tools_detection.log"
+                                                } catch { }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch { }
+                    
+                    # Check for processes reading SAM/SECURITY registry hives (Mimikatz-like behavior)
+                    try {
+                        $cmdLine = $proc.CommandLine
+                        if ($cmdLine -match "reg.*save.*sam|reg.*save.*security|reg.*save.*system") {
+                            $threats += @{
+                                Type = "Credential Dumping Behavior (Registry Access)"
+                                ProcessName = $procName
+                                ProcessPath = $procPath
+                                ProcessId = $procId
+                                CommandLine = $cmdLine
+                                Behavior = "Accessing SAM/SECURITY registry"
+                                Risk = "CRITICAL"
+                                Timestamp = Get-Date
+                            }
+                        }
+                    } catch { }
+                    
+                } catch { }
+            }
+        } catch {
+            Write-AVLog "Behavioral detection error: $_" "WARN" "attack_tools_detection.log"
+        }
+        
+        # Method 7: Behavioral Detection - File Signature Scanning (works on renamed files)
+        try {
+            $scanPaths = @(
+                "$env:USERPROFILE\Downloads",
+                "$env:USERPROFILE\Desktop",
+                "$env:TEMP",
+                "C:\Tools",
+                "C:\Hacking"
+            )
+            
+            foreach ($scanPath in $scanPaths) {
+                if (-not (Test-Path $scanPath)) { continue }
+                
+                try {
+                    $exeFiles = Get-ChildItem -Path $scanPath -Filter "*.exe" -Recurse -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Length -lt 50MB } |  # Skip very large files
+                        Select-Object -First 50
+                    
+                    foreach ($file in $exeFiles) {
+                        try {
+                            # Read file content for signature matching
+                            $fileBytes = [System.IO.File]::ReadAllBytes($file.FullName)
+                            $fileContent = [System.Text.Encoding]::ASCII.GetString($fileBytes[0..[Math]::Min(1048576, $fileBytes.Length-1)])
+                            
+                            # Check against tool signatures
+                            foreach ($toolName in $toolSignatures.Keys) {
+                                $matchCount = 0
+                                foreach ($signature in $toolSignatures[$toolName]) {
+                                    if ($fileContent -match [regex]::Escape($signature)) {
+                                        $matchCount++
+                                    }
+                                }
+                                
+                                # If multiple signatures match, it's likely this tool
+                                if ($matchCount -ge 2) {
+                                    # Check if unsigned
+                                    $sig = Get-AuthenticodeSignature -FilePath $file.FullName -ErrorAction SilentlyContinue
+                                    if ($sig.Status -ne "Valid") {
+                                        $threats += @{
+                                            Type = "Attack Tool Detected by Signature (Renamed: $($file.Name))"
+                                            ToolName = $toolName
+                                            FilePath = $file.FullName
+                                            FileName = $file.Name
+                                            SignatureMatches = $matchCount
+                                            DetectionMethod = "FileSignature"
+                                            Risk = "CRITICAL"
+                                            Timestamp = Get-Date
+                                        }
+                                        
+                                        if ($Config.AutoQuarantine) {
+                                            try {
+                                                Move-ToQuarantine -FilePath $file.FullName -Reason "Attack tool detected by signature: $toolName"
+                                                Write-AVLog "Quarantined renamed attack tool: $($file.Name) (detected as $toolName)" "THREAT" "attack_tools_detection.log"
+                                            } catch { }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch { }
+                    }
+                } catch { }
+            }
+        } catch {
+            Write-AVLog "File signature scanning error: $_" "WARN" "attack_tools_detection.log"
+        }
+        
+        # Method 8: Behavioral Detection - Command Line Pattern Analysis
+        try {
+            $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+            
+            foreach ($proc in $processes) {
+                try {
+                    $cmdLine = $proc.CommandLine
+                    if (-not $cmdLine) { continue }
+                    
+                    $procName = Split-Path -Leaf $proc.ExecutablePath -ErrorAction SilentlyContinue
+                    $procPath = $proc.ExecutablePath
+                    
+                    # Check for tool-specific command patterns (works even if renamed)
+                    $suspiciousPatterns = @{
+                        "PasswordCracking" = @(
+                            "-l.*-P", "-L.*-p", "wordlist", "dictionary", "brute.*force",
+                            "crack.*password", "hash.*crack"
+                        )
+                        "CredentialDumping" = @(
+                            "sekurlsa", "lsadump", "mimikatz", "wdigest", "kerberos",
+                            "dump.*password", "extract.*hash", "sam.*dump"
+                        )
+                        "NetworkScanning" = @(
+                            "-p-", "-p.*1-65535", "port.*scan", "host.*scan",
+                            "-sS", "-sT", "-sU", "nmap.*scan"
+                        )
+                        "Exploitation" = @(
+                            "exploit", "payload", "reverse.*shell", "bind.*shell",
+                            "meterpreter", "msfconsole", "msfvenom"
+                        )
+                    }
+                    
+                    foreach ($behaviorType in $suspiciousPatterns.Keys) {
+                        foreach ($pattern in $suspiciousPatterns[$behaviorType]) {
+                            if ($cmdLine -match $pattern) {
+                                # Check if it's a legitimate process
+                                $legitimateProcs = @("svchost", "dllhost", "taskhost", "explorer", "chrome", "firefox", "edge")
+                                $isLegit = $false
+                                foreach ($legit in $legitimateProcs) {
+                                    if ($procName -match $legit -and $procPath -like "*$legit*") {
+                                        $isLegit = $true
+                                        break
+                                    }
+                                }
+                                
+                                if (-not $isLegit) {
+                                    $threats += @{
+                                        Type = "Attack Tool Behavior Detected: $behaviorType"
+                                        ProcessName = $procName
+                                        ProcessPath = $procPath
+                                        ProcessId = $proc.ProcessId
+                                        CommandLine = $cmdLine
+                                        BehaviorPattern = $pattern
+                                        Risk = "HIGH"
+                                        Timestamp = Get-Date
+                                    }
+                                    
+                                    if ($Config.AutoKillThreats) {
+                                        try {
+                                            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                                            Write-AVLog "Terminated suspicious behavior: $procName ($behaviorType)" "THREAT" "attack_tools_detection.log"
+                                        } catch { }
+                                    }
+                                }
+                                break
+                            }
+                        }
+                    }
+                } catch { }
+            }
+        } catch {
+            Write-AVLog "Command line pattern analysis error: $_" "WARN" "attack_tools_detection.log"
+        }
+        
+        # Log all detections and threats
+        if ($detections.Count -gt 0 -or $threats.Count -gt 0) {
+            foreach ($detection in $detections) {
+                Write-AVLog "ATTACK TOOLS DETECTION: $($detection.Type) - $($detection.Directory -or 'System')" "INFO" "attack_tools_detection.log"
+            }
+            
+            foreach ($threat in $threats) {
+                $detectionMethod = if ($threat.DetectionMethod) { " [$($threat.DetectionMethod)]" } else { "" }
+                Write-AVLog "ATTACK TOOL THREAT: $($threat.Type) - $($threat.ToolName -or $threat.ProcessName -or 'Unknown') - Risk: $($threat.Risk)$detectionMethod" "THREAT" "attack_tools_detection.log"
+                $Global:AntivirusState.ThreatCount++
+                
+                # Add to response queue
+                if ($Config.AutoKillThreats) {
+                    Add-ThreatToResponseQueue -ThreatType $threat.Type -Details $threat -Severity $threat.Risk
+                }
+            }
+            
+            # Write detailed log
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\AttackToolsDetection_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logDir = Split-Path $logPath -Parent
+            if (!(Test-Path $logDir)) {
+                New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+            }
+            
+            $allEvents = $detections + $threats
+            $allEvents | ForEach-Object {
+                $eventType = if ($_.Risk -match "CRITICAL|HIGH") { "THREAT" } else { "INFO" }
+                "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')|$eventType|$($_.Type)|$($_.Risk)|$($_.ToolName -or $_.ProcessName -or $_.Directory -or 'N/A')|$($_.ProcessId -or 'N/A')|$($_.Category -or 'N/A')|$($_.DetectionMethod -or 'N/A')" |
+                    Add-Content -Path $logPath -ErrorAction SilentlyContinue
+            }
+        }
+        
+    } catch {
+        Write-AVLog "Attack tools detection error: $_" "ERROR" "attack_tools_detection.log"
+    }
+    
+    return ($detections.Count + $threats.Count)
+}
+
 function Invoke-EventLogMonitoring {
     param(
         [int]$LookbackHours = 1,
@@ -3630,6 +5668,31 @@ function Invoke-FilelessDetection {
 
     try {
         $Threats = @()
+        
+        # Fileless malware signatures for advanced detection
+        $filelessSignatures = @{
+            "FilelessMalware" = @(
+                "fileless", "memory.*only", "powershell.*encoded", "base64.*decode",
+                "downloadstring", "invoke.*expression", "bypass.*execution"
+            )
+        }
+        
+        # Fileless behavioral patterns
+        $filelessBehaviors = @{
+            "PowerShellFileless" = @(
+                "-enc", "-EncodedCommand", "downloadstring", "DownloadString",
+                "iex", "Invoke-Expression", "bypass.*executionpolicy",
+                "-nop.*-w.*hidden", "new-object.*net.webclient"
+            )
+            "WMIFileless" = @(
+                "wmic.*process", "wmic.*shadowcopy", "wmic.*event",
+                "wmi.*subscription", "wmi.*consumer"
+            )
+            "RegistryFileless" = @(
+                "reg.*add.*run", "reg.*load", "reg.*save",
+                "registry.*run", "startup.*script"
+            )
+        }
 
         # 1. PowerShell encoded commands
         # Whitelist own process and script path
@@ -3647,6 +5710,32 @@ function Invoke-FilelessDetection {
                 # Skip if this is our own script
                 if ($ownScriptPath -and $CommandLine -like "*$ownScriptPath*") {
                     continue
+                }
+                
+                # Use advanced detection framework
+                $procPath = $Process.Path
+                if ($procPath -and (Test-Path $procPath)) {
+                    $detectionResult = Invoke-AdvancedThreatDetection `
+                        -FilePath $procPath `
+                        -FileSignatures $filelessSignatures `
+                        -BehavioralIndicators $filelessBehaviors `
+                        -CommandLine $CommandLine `
+                        -CheckEntropy $false
+                    
+                    if ($detectionResult.IsThreat) {
+                        $Threats += @{
+                            Type = "Fileless Malware Detected via Advanced Framework"
+                            ProcessId = $Process.Id
+                            ProcessName = $Process.ProcessName
+                            CommandLine = $CommandLine
+                            ThreatName = $detectionResult.ThreatName
+                            DetectionMethods = $detectionResult.DetectionMethods -join ", "
+                            Confidence = $detectionResult.Confidence
+                            Severity = if ($detectionResult.Risk -eq "CRITICAL") { "Critical" } elseif ($detectionResult.Risk -eq "HIGH") { "High" } else { "Medium" }
+                            Time = Get-Date
+                        }
+                        continue
+                    }
                 }
 
                 $SuspiciousPatterns = @{
@@ -5409,11 +7498,57 @@ function Invoke-CodeInjectionDetection {
     $detections = @()
     
     try {
+        # Code injection signatures for advanced detection
+        $codeInjectionSignatures = @{
+            "CodeInjection" = @(
+                "code.*injection", "dll.*injection", "process.*hollowing",
+                "reflective.*dll", "shellcode", "inject.*code"
+            )
+        }
+        
+        # Code injection behavioral patterns
+        $codeInjectionBehaviors = @{
+            "InjectionAPIs" = @(
+                "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
+                "NtCreateThreadEx", "RtlCreateUserThread", "SetThreadContext",
+                "QueueUserAPC", "ProcessHollowing", "DLL.*injection"
+            )
+            "MemoryManipulation" = @(
+                "VirtualAlloc", "VirtualProtect", "WriteProcessMemory",
+                "ReadProcessMemory", "NtWriteVirtualMemory"
+            )
+        }
+        
         # Check for processes with unusual memory regions (injection indicator)
         $processes = Get-Process -ErrorAction SilentlyContinue
         
         foreach ($proc in $processes) {
             try {
+                $procPath = $proc.Path
+                $procCmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
+                
+                # Use advanced detection framework
+                if ($procPath -and (Test-Path $procPath)) {
+                    $detectionResult = Invoke-AdvancedThreatDetection `
+                        -FilePath $procPath `
+                        -FileSignatures $codeInjectionSignatures `
+                        -BehavioralIndicators $codeInjectionBehaviors `
+                        -CommandLine $procCmdLine `
+                        -CheckEntropy $true
+                    
+                    if ($detectionResult.IsThreat) {
+                        $detections += @{
+                            ProcessId = $proc.Id
+                            ProcessName = $proc.ProcessName
+                            ThreatName = $detectionResult.ThreatName
+                            DetectionMethods = $detectionResult.DetectionMethods -join ", "
+                            Confidence = $detectionResult.Confidence
+                            Type = "Code Injection Detected via Advanced Framework"
+                            Risk = if ($detectionResult.Risk -eq "CRITICAL") { "High" } else { "Medium" }
+                        }
+                    }
+                }
+                
                 $modules = $proc.Modules
                 
                 # Check for processes with modules in unusual locations
@@ -6764,6 +8899,9 @@ Write-Host "[PROTECTION] Anti-termination safeguards active" -ForegroundColor Gr
         "BrowserExtensionMonitoring",
         "ShadowCopyMonitoring",
         "USBMonitoring",
+        "MobileDeviceMonitoring",
+        "AttackToolsDetection",
+        "AdvancedThreatDetection",
         "EventLogMonitoring",
         "FirewallRuleMonitoring",
         "ServiceMonitoring",
