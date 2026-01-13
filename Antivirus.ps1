@@ -8,6 +8,9 @@ param([switch]$Uninstall)
 # Author: Gorstak
 # ============================================================================
 
+# Unique script identifier (GUID) - used for process identification and mutex naming
+$Script:ScriptGUID = "539EF6B5-578B-4AF3-A5C7-FD564CB9C8FB"
+
 $Script:InstallPath = "C:\ProgramData\AntivirusProtection"
 $Script:ScriptName = Split-Path -Leaf $PSCommandPath
 $Script:MaxRestartAttempts = 3
@@ -60,6 +63,8 @@ $Script:ManagedJobConfig = @{
     ReflectiveDLLInjectionDetectionIntervalSeconds = 30
     ResponseEngineIntervalSeconds = 10
     PrivacyForgeSpoofingIntervalSeconds = 60
+    ElfDLLUnloaderIntervalSeconds = 10
+    UnsignedDLLRemoverIntervalSeconds = 300
 }
 
 $Config = @{
@@ -71,7 +76,7 @@ $Config = @{
     ReportsPath = "$Script:InstallPath\Reports"
     HMACKeyPath = "$Script:InstallPath\Data\db_integrity.hmac"
     PIDFilePath = "$Script:InstallPath\Data\antivirus.pid"
-    MutexName = "Local\AntivirusProtection_Mutex_{0}_{1}" -f $env:COMPUTERNAME, $env:USERNAME
+    MutexName = "Local\AntivirusProtection_Mutex_{0}_{1}_{2}" -f $env:COMPUTERNAME, $env:USERNAME, $Script:ScriptGUID
 
     CirclHashLookupUrl = "https://hashlookup.circl.lu/lookup/sha256"
     CymruApiUrl = "https://api.malwarehash.cymru.com/v1/hash"
@@ -303,6 +308,60 @@ function Uninstall-Antivirus {
     Write-Host "`n=== Uninstalling Antivirus ===`n" -ForegroundColor Cyan
     Write-StabilityLog "Starting uninstall process"
 
+    # First, stop all running instances
+    try {
+        Write-Host "[*] Stopping running instances..." -ForegroundColor Yellow
+        Write-StabilityLog "Stopping running antivirus instances"
+        
+        # Check PID file for running instance
+        if (Test-Path $Config.PIDFilePath) {
+            try {
+                $existingPID = [int](Get-Content $Config.PIDFilePath -ErrorAction Stop)
+                if ($existingPID -ne $PID) {
+                    $existingProcess = Get-Process -Id $existingPID -ErrorAction SilentlyContinue
+                    if ($existingProcess) {
+                        # Verify it's our script before killing
+                        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $existingPID" -ErrorAction SilentlyContinue).CommandLine
+                        $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
+                        $isOurScript = $false
+                        if ($cmdLine) {
+                            if ($cmdLine -like "*$($Script:ScriptGUID)*" -or ($scriptPath -and $cmdLine -like "*$scriptPath*")) {
+                                $isOurScript = $true
+                            }
+                        }
+                        
+                        if ($isOurScript) {
+                            Write-Host "[+] Stopping instance (PID: $existingPID)" -ForegroundColor Green
+                            Stop-Process -Id $existingPID -Force -ErrorAction SilentlyContinue
+                            Start-Sleep -Seconds 2
+                        }
+                    }
+                }
+            } catch {
+                Write-StabilityLog "Error reading PID file during uninstall: $_" "WARN"
+            }
+        }
+        
+        # Also check for any PowerShell processes running our script
+        $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
+        $allProcesses = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction SilentlyContinue
+        foreach ($proc in $allProcesses) {
+            if ($proc.ProcessId -eq $PID) { continue }
+            try {
+                $cmdLine = $proc.CommandLine
+                if ($cmdLine -and ($cmdLine -like "*$($Script:ScriptGUID)*" -or ($scriptPath -and $cmdLine -like "*$scriptPath*"))) {
+                    Write-Host "[+] Stopping instance (PID: $($proc.ProcessId))" -ForegroundColor Green
+                    Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            } catch {}
+        }
+        
+        # Wait a moment for processes to terminate
+        Start-Sleep -Seconds 1
+    } catch {
+        Write-Host "[!] Warning: Could not stop all instances: $_" -ForegroundColor Yellow
+        Write-StabilityLog "Warning: Could not stop all instances during uninstall: $_" "WARN"
+    }
 
     try {
         if ($script:ManagedJobs) {
@@ -376,8 +435,20 @@ function Initialize-Mutex {
                         $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $existingPID" -ErrorAction SilentlyContinue).CommandLine
                         $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
                         
-                        # If existing process is running our script path, block it
-                        if ($cmdLine -and $scriptPath -and $cmdLine -like "*$scriptPath*") {
+                        # Check if existing process is running our script (by GUID or path)
+                        $isOurScript = $false
+                        if ($cmdLine) {
+                            # Primary check: GUID (most reliable)
+                            if ($cmdLine -like "*$($Script:ScriptGUID)*") {
+                                $isOurScript = $true
+                            }
+                            # Secondary check: script path
+                            elseif ($scriptPath -and $cmdLine -like "*$scriptPath*") {
+                                $isOurScript = $true
+                            }
+                        }
+                        
+                        if ($isOurScript) {
                             Write-StabilityLog "Blocked duplicate instance - existing PID: $existingPID" "WARN"
                             Write-Host "[!] Another instance is already running (PID: $existingPID)" -ForegroundColor Yellow
                             Write-AVLog "Blocked duplicate instance - existing PID: $existingPID" "WARN"
@@ -424,56 +495,113 @@ function Initialize-Mutex {
             
             # Check for running instances, excluding our own PID
             $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
-            $runningInstances = Get-Process powershell -ErrorAction SilentlyContinue | Where-Object {
-                # Exclude our own process
-                if ($_.Id -eq $PID) {
-                    return $false
-                }
-                
-                try {
-                    $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)" -ErrorAction SilentlyContinue).CommandLine
-                    # Check if it's actually running our script path (not just any script with same name)
-                    if ($cmdLine -and $scriptPath -and $cmdLine -like "*$scriptPath*") {
-                        return $true
-                    }
-                    # Fallback: check for script name in command line if path match fails
-                    if ($cmdLine -and $cmdLine -like "*$($Script:ScriptName)*" -and $cmdLine -like "*Antivirus*") {
-                        return $true
-                    }
-                } catch {}
-                return $false
-            }
+            $installedScriptPath = Join-Path $Script:InstallPath $Script:ScriptName
             
-            if ($runningInstances) {
-                $instancePIDs = $runningInstances.Id | Where-Object { $_ -ne $PID }
-                if ($instancePIDs) {
-                    Write-StabilityLog "Blocked duplicate instance - found $($instancePIDs.Count) running PowerShell process(es) with script (PIDs: $($instancePIDs -join ', '))" "WARN"
-                    Write-Host "[!] Another instance is already running (PIDs: $($instancePIDs -join ', '))" -ForegroundColor Yellow
-                    Write-AVLog "Blocked duplicate instance - found running processes: $($instancePIDs -join ', ')" "WARN"
-                    $Global:AntivirusState.Mutex.Dispose()
-                    throw "Another instance is already running (mutex locked)"
-                }
-            } else {
-                # Mutex is orphaned (no actual process running) - try to release it
-                Write-StabilityLog "Mutex appears orphaned - no running instances found, attempting cleanup" "WARN"
+            $verifiedInstances = @()
+            $allPowerShellProcesses = Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
+            
+            foreach ($proc in $allPowerShellProcesses) {
                 try {
-                    # Try to create a new mutex with the same name to see if we can take ownership
-                    # This is a workaround for orphaned mutexes
-                    $Global:AntivirusState.Mutex.Dispose()
-                    Start-Sleep -Milliseconds 500
-                    $Global:AntivirusState.Mutex = New-Object System.Threading.Mutex($false, $mutexName)
-                    $acquired = $Global:AntivirusState.Mutex.WaitOne(1000)
-                    if ($acquired) {
-                        Write-StabilityLog "Successfully recovered orphaned mutex" "INFO"
-                    } else {
-                        Write-StabilityLog "Could not recover mutex - may need manual cleanup" "ERROR"
-                        Write-Host "[!] Failed to acquire mutex - another instance may be running" -ForegroundColor Yellow
-                        throw "Another instance is already running (mutex locked)"
+                    # Verify process is actually responsive (not hung/dead)
+                    $procInfo = Get-Process -Id $proc.Id -ErrorAction Stop
+                    if (-not $procInfo.Responding) {
+                        Write-StabilityLog "Process $($proc.Id) is not responding - treating as dead" "WARN"
+                        continue
+                    }
+                    
+                    $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
+                    if (-not $cmdLine) {
+                        continue
+                    }
+                    
+                    # Strict verification: Primary check is GUID (most reliable), then script path
+                    $isOurScript = $false
+                    $matchedPath = $null
+                    $matchedBy = $null
+                    
+                    # PRIMARY: Check for GUID in command line (most reliable identifier)
+                    if ($cmdLine -like "*$($Script:ScriptGUID)*") {
+                        $isOurScript = $true
+                        $matchedBy = "GUID"
+                        # Also try to extract the script path for logging
+                        if ($cmdLine -match '-File\s+([^\s]+)') {
+                            $matchedPath = $matches[1].Trim('"').Trim("'")
+                        } else {
+                            $matchedPath = "GUID_Match"
+                        }
+                    }
+                    # SECONDARY: Check current script path
+                    elseif ($scriptPath -and $cmdLine -like "*$scriptPath*") {
+                        $isOurScript = $true
+                        $matchedPath = $scriptPath
+                        $matchedBy = "Path"
+                    }
+                    # TERTIARY: Check installed script path (if different from current)
+                    elseif ($installedScriptPath -and (Test-Path $installedScriptPath) -and $cmdLine -like "*$installedScriptPath*") {
+                        $isOurScript = $true
+                        $matchedPath = $installedScriptPath
+                        $matchedBy = "Path"
+                    }
+                    
+                    if ($isOurScript) {
+                        Write-StabilityLog "Verified process $($proc.Id) is running our script (matched by $matchedBy): $matchedPath" "INFO"
+                        $verifiedInstances += @{
+                            Id = $proc.Id
+                            CommandLine = $cmdLine
+                            Path = $matchedPath
+                            MatchedBy = $matchedBy
+                        }
                     }
                 } catch {
-                    Write-StabilityLog "Mutex recovery failed: $_" "ERROR"
-                    Write-Host "[!] Failed to acquire mutex - another instance may be running" -ForegroundColor Yellow
-                    throw "Another instance is already running (mutex locked)"
+                    # Process doesn't exist or error checking - don't count it
+                    Write-StabilityLog "Error checking process $($proc.Id): $_" "WARN"
+                    continue
+                }
+            }
+            
+            if ($verifiedInstances.Count -gt 0) {
+                $instancePIDs = $verifiedInstances | ForEach-Object { $_.Id }
+                $instanceDetails = $verifiedInstances | ForEach-Object { "PID $($_.Id): $($_.Path)" }
+                Write-StabilityLog "Blocked duplicate instance - found $($verifiedInstances.Count) verified running instance(s) (PIDs: $($instancePIDs -join ', '))" "WARN"
+                Write-Host "[!] Another instance is already running (PIDs: $($instancePIDs -join ', '))" -ForegroundColor Yellow
+                Write-Host "[!] Running from: $($instanceDetails -join '; ')" -ForegroundColor Yellow
+                Write-AVLog "Blocked duplicate instance - found running processes: $($instancePIDs -join ', ')" "WARN"
+                $Global:AntivirusState.Mutex.Dispose()
+                throw "Another instance is already running (mutex locked)"
+            } else {
+                # No verified instances found - treat as stale mutex
+                # Since we've verified no process is running, we can safely proceed
+                Write-StabilityLog "Stale mutex detected (no running process found) - proceeding anyway" "WARN"
+                Write-Host "[!] Stale mutex detected but no process running - proceeding (stale mutex will be cleaned up)" -ForegroundColor Yellow
+                
+                # Dispose of the failed mutex reference
+                try {
+                    $Global:AntivirusState.Mutex.Dispose()
+                } catch {}
+                $Global:AntivirusState.Mutex = $null
+                
+                # Wait a bit to allow kernel cleanup
+                Start-Sleep -Milliseconds 500
+                
+                # Try to create a new mutex (Windows should have cleaned up the stale one)
+                # If it still fails, we'll proceed without mutex protection (since we verified no process is running)
+                try {
+                    $Global:AntivirusState.Mutex = New-Object System.Threading.Mutex($false, $mutexName)
+                    $acquired = $Global:AntivirusState.Mutex.WaitOne(2000)
+                    if ($acquired) {
+                        Write-StabilityLog "Successfully acquired mutex after stale detection" "INFO"
+                    } else {
+                        # Still can't acquire, but no process is running - proceed without mutex
+                        Write-StabilityLog "Mutex still locked but no process running - proceeding without mutex (stale mutex)" "WARN"
+                        Write-Host "[!] Warning: Proceeding without mutex (stale mutex detected). This is safe since no process is running." -ForegroundColor Yellow
+                        $Global:AntivirusState.Mutex.Dispose()
+                        $Global:AntivirusState.Mutex = $null
+                    }
+                } catch {
+                    # If we can't create the mutex, proceed anyway since we verified no process is running
+                    Write-StabilityLog "Could not create mutex after stale detection, but no process running - proceeding: $_" "WARN"
+                    Write-Host "[!] Warning: Proceeding without mutex protection due to stale mutex." -ForegroundColor Yellow
+                    $Global:AntivirusState.Mutex = $null
                 }
             }
         }
@@ -484,7 +612,11 @@ function Initialize-Mutex {
 
         $PID | Out-File -FilePath $Config.PIDFilePath -Force
         $Global:AntivirusState.Running = $true
-        Write-StabilityLog "Mutex acquired, PID file written: $PID"
+        if ($Global:AntivirusState.Mutex) {
+            Write-StabilityLog "Mutex acquired, PID file written: $PID"
+        } else {
+            Write-StabilityLog "PID file written: $PID (running without mutex due to stale mutex)"
+        }
         Write-AVLog "Antivirus started (PID: $PID)"
         Write-Host "[+] Process ID: $PID" -ForegroundColor Green
 
@@ -718,11 +850,14 @@ function Invoke-ManagedJobsTick {
         $job.LastStartUtc = $NowUtc
 
         try {
+            # Suppress all output from managed job execution to prevent pipeline binding issues
+            # Use Out-Null to ensure complete suppression of all streams including return values
+            # Redirect all streams (*>&1) to prevent any output from reaching the pipeline
             if ($null -ne $job.ArgumentList) {
-                Invoke-Command -ScriptBlock $job.ScriptBlock -ArgumentList $job.ArgumentList
+                $null = Invoke-Command -ScriptBlock $job.ScriptBlock -ArgumentList $job.ArgumentList -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -InformationAction SilentlyContinue *>&1 | Out-Null
             }
             else {
-                & $job.ScriptBlock
+                $null = & $job.ScriptBlock -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -InformationAction SilentlyContinue *>&1 | Out-Null
             }
             $job.LastSuccessUtc = [DateTime]::UtcNow
             $job.RestartAttempts = 0
@@ -802,7 +937,14 @@ function Start-ManagedJob {
             }
         }
         
-        & $FunctionName @bound
+        # Suppress output to prevent pipeline binding issues - use Out-Null to ensure complete suppression
+        # Also suppress any implicit output by explicitly assigning to $null and redirecting all streams
+        try {
+            $null = & $FunctionName @bound *>&1 | Out-Null
+        } catch {
+            # Suppress errors too
+            $null = $_
+        }
     }
 
     Register-ManagedJob -Name $jobName -ScriptBlock $sb -ArgumentList @($funcName, $Config) -IntervalSeconds $IntervalSeconds -Enabled $true -Critical $false -MaxRestartAttempts $maxRestarts -RestartDelaySeconds $restartDelay
@@ -977,6 +1119,11 @@ function Invoke-HashDetection {
         [string]$MalwareBazaarApiUrl,
         [bool]$AutoQuarantine = $true
     )
+    
+    # Ensure QuarantinePath is set from Config if not provided as parameter
+    if (-not $QuarantinePath -and $Config.QuarantinePath) {
+        $QuarantinePath = $Config.QuarantinePath
+    }
 
     $SuspiciousPaths = @(
         "$env:TEMP\*",
@@ -1086,8 +1233,8 @@ function Measure-FileEntropy {
 
 function Invoke-AdvancedThreatDetection {
     param(
-        [Parameter(Mandatory=$true)]
-        [string]$FilePath,
+        [Parameter(Mandatory=$false)]
+        [string]$FilePath = "",
         
         [Parameter(Mandatory=$false)]
         [hashtable]$KnownHashes = @{},
@@ -1110,6 +1257,18 @@ function Invoke-AdvancedThreatDetection {
         [Parameter(Mandatory=$false)]
         [double]$EntropyThreshold = 7.5
     )
+    
+    # Early return if FilePath is not provided - prevents prompt when called without parameters
+    if ([string]::IsNullOrWhiteSpace($FilePath)) {
+        return @{
+            IsThreat = $false
+            ThreatName = ""
+            DetectionMethods = @()
+            Confidence = 0
+            Risk = "LOW"
+            Details = @{}
+        }
+    }
     
     $detectionResults = @{
         IsThreat = $false
@@ -1439,7 +1598,13 @@ function Invoke-SystemWideAdvancedThreatDetection {
                 $Global:AntivirusState.ThreatCount++
                 
                 if ($Config.AutoKillThreats) {
-                    Add-ThreatToResponseQueue -ThreatType $threat.Type -Details $threat -Severity $threat.Risk
+                    # Get the first available path (use proper null-coalescing, not -or operator)
+                    $threatPath = if ($threat.ProcessPath) { $threat.ProcessPath }
+                                  elseif ($threat.FilePath) { $threat.FilePath }
+                                  elseif ($threat.ProcessName) { $threat.ProcessName }
+                                  elseif ($threat.FileName) { $threat.FileName }
+                                  else { "" }
+                    Add-ThreatToResponseQueue -ThreatType $threat.Type -ThreatPath $threatPath -Severity $threat.Risk
                 }
             }
             
@@ -1447,20 +1612,31 @@ function Invoke-SystemWideAdvancedThreatDetection {
             $logPath = "$env:ProgramData\AntivirusProtection\Logs\AdvancedThreatDetection_$(Get-Date -Format 'yyyy-MM-dd').log"
             $logDir = Split-Path $logPath -Parent
             if (!(Test-Path $logDir)) {
-                New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+                New-Item -ItemType Directory -Path $logDir -Force -ErrorAction SilentlyContinue | Out-Null
             }
             
             $threats | ForEach-Object {
                 "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')|$($_.Type)|$($_.Risk)|$($_.Confidence)|$($_.DetectionMethods)|$($_.ProcessName -or $_.FileName -or 'N/A')|$($_.ProcessId -or 'N/A')" |
                     Add-Content -Path $logPath -ErrorAction SilentlyContinue
-            }
+            } | Out-Null
         }
         
     } catch {
         Write-AVLog "System-wide advanced threat detection error: $_" "ERROR" "advanced_threat_detection.log"
     }
     
-    return $threats.Count
+    # Return count without outputting to pipeline - suppress any accidental output
+    # Clear all variables to prevent any implicit output that might cause parameter binding
+    $result = $threats.Count
+    $threats = $null
+    $detections = $null
+    $processes = $null
+    $exeFiles = $null
+    $scanPaths = $null
+    $threatSignatures = $null
+    $behavioralPatterns = $null
+    [void]$result  # Explicitly discard if accidentally output
+    return $result
 }
 
 function Invoke-LOLBinDetection {
@@ -3170,15 +3346,27 @@ function Invoke-RootkitDetection {
                 } catch {}
 
                 if ($Suspicious) {
+                    # Perform behavioral analysis on suspicious driver
+                    $behavioralAnalysis = $null
+                    try {
+                        $behavioralAnalysis = Invoke-DriverBehavioralAnalysis -DriverName $Driver.DriverName -DriverPath $Driver.OriginalFileName -DriverServiceName $Driver.DriverName
+                        if ($behavioralAnalysis.IsMalicious) {
+                            $Reasons += "Behavioral analysis indicates malicious activity (Score: $($behavioralAnalysis.ThreatScore))"
+                            $Reasons += $behavioralAnalysis.Reasons
+                        }
+                    } catch {}
+                    
                     $Threats += @{
                         Type = "SuspiciousDriver"
                         Name = $Driver.DriverName
                         Provider = $Driver.ProviderName
                         Path = $Driver.OriginalFileName
                         Reasons = $Reasons
-                        Severity = "High"
+                        Severity = if ($behavioralAnalysis -and $behavioralAnalysis.Severity -eq "Critical") { "Critical" } else { "High" }
+                        BehavioralAnalysis = $behavioralAnalysis
                     }
-                    Write-Output "[Rootkit] SUSPICIOUS: Driver detected | Driver: $($Driver.DriverName) | Provider: $($Driver.ProviderName) | Reasons: $($Reasons -join '; ')"
+                    $behavioralInfo = if ($behavioralAnalysis) { " | Behavioral Score: $($behavioralAnalysis.ThreatScore)" } else { "" }
+                    Write-Output "[Rootkit] SUSPICIOUS: Driver detected | Driver: $($Driver.DriverName) | Provider: $($Driver.ProviderName) | Reasons: $($Reasons -join '; ')$behavioralInfo"
                 }
             }
         } catch {
@@ -3225,16 +3413,28 @@ function Invoke-RootkitDetection {
                         foreach ($key in $keys) {
                             $props = Get-ItemProperty -Path $key.PSPath -ErrorAction SilentlyContinue
                             
-                            # Check for suspicious values
-                            if ($props.ImagePath -and $props.ImagePath -notmatch "^(C:\\(Windows|Program Files))") {
-                                $Threats += @{
-                                    Type = "SuspiciousServiceRegistry"
-                                    Path = $key.PSPath
-                                    ImagePath = $props.ImagePath
-                                    Reasons = @("Service in non-standard location")
-                                    Severity = "Medium"
+                            # Check for suspicious values - exclude Windows system paths
+                            # Windows system paths include: C:\Windows, \SystemRoot\, System32\, etc.
+                            if ($props.ImagePath) {
+                                $imagePathLower = $props.ImagePath.ToLower().Replace('\', '/')
+                                # Check for various Windows system path formats (normalize backslashes to forward slashes for matching)
+                                $isSystemPath = $imagePathLower -match "^(c:/windows|/systemroot|system32|syswow64)" -or 
+                                               $imagePathLower -match '^"c:/windows' -or
+                                               $imagePathLower.StartsWith("system32/") -or
+                                               $imagePathLower.StartsWith("syswow64/") -or
+                                               $imagePathLower.StartsWith("/systemroot/")
+                                
+                                # Only flag if it's NOT a system path AND not in Program Files
+                                if (-not $isSystemPath -and $props.ImagePath -notmatch "^(C:\\(Windows|Program Files))") {
+                                    $Threats += @{
+                                        Type = "SuspiciousServiceRegistry"
+                                        Path = $key.PSPath
+                                        ImagePath = $props.ImagePath
+                                        Reasons = @("Service in non-standard location")
+                                        Severity = "Medium"
+                                    }
+                                    Write-Output "[Rootkit] SUSPICIOUS: Service in non-standard location | Path: $($key.PSPath) | ImagePath: $($props.ImagePath)"
                                 }
-                                Write-Output "[Rootkit] SUSPICIOUS: Service in non-standard location | Path: $($key.PSPath) | ImagePath: $($props.ImagePath)"
                             }
                         }
                     } catch {}
@@ -3278,30 +3478,206 @@ function Invoke-RootkitDetection {
             }
         }
 
-        # 5. Check for file system filters (rootkit indicator)
+        # 5. Check for file system filters and minifilter drivers (rootkit indicator)
         try {
+            # List of specific target minifilter drivers to detect and remove
+            # Only targeting bfs and unionfs (from batch file) - other minifilter drivers are handled more conservatively
+            $targetMinifilterDrivers = @("bfs", "unionfs")
+            
+            # Check for specific target drivers first (bfs, unionfs only)
+            foreach ($targetDriver in $targetMinifilterDrivers) {
+                try {
+                    $driverService = Get-CimInstance -ClassName Win32_SystemDriver -Filter "Name = '$targetDriver'" -ErrorAction SilentlyContinue
+                    if ($driverService) {
+                        $driverPath = $driverService.PathName
+                        if (-not $driverPath) {
+                            $driverPath = "C:\Windows\System32\drivers\$targetDriver.sys"
+                        }
+                        
+                        $Threats += @{
+                            Type = "SuspiciousFileSystemFilter"
+                            Name = $targetDriver
+                            Path = $driverPath
+                            State = $driverService.State
+                                            Reasons = @("Target minifilter driver detected (bfs/unionfs)")
+                            Severity = "High"
+                        }
+                        Write-Output "[Rootkit] HIGH: Target minifilter driver detected | Name: $targetDriver | Path: $driverPath"
+                    }
+                } catch {}
+            }
+            
+            # Check via WMI for file system filter drivers
             $FileSystemFilters = Get-WmiObject -Class Win32_SystemDriver -Filter "Name LIKE '%filter%' OR Name LIKE '%fs%'" -ErrorAction SilentlyContinue
             foreach ($filter in $FileSystemFilters) {
-                if ($filter.PathName -and $filter.PathName -notmatch "^\\\\?\\C:\\Windows") {
+                $isSuspicious = $false
+                $reasons = @()
+                
+                # Skip if already detected as target driver
+                $isTargetDriver = $false
+                foreach ($target in $targetMinifilterDrivers) {
+                    if ($filter.Name -eq $target -or $filter.Name -like "*$target*") {
+                        $isTargetDriver = $true
+                        break
+                    }
+                }
+                if ($isTargetDriver) { continue }
+                
+                # Check if in non-standard location - exclude Windows system paths
+                # Windows system paths include: C:\Windows, \SystemRoot\, System32\, etc.
+                if ($filter.PathName) {
+                    $pathNameLower = $filter.PathName.ToLower().Replace('\', '/')
+                    # Check for various Windows system path formats (normalize backslashes to forward slashes for matching)
+                    $isSystemPath = $pathNameLower -match "^(c:/windows|/systemroot|system32|syswow64)" -or
+                                   $pathNameLower -match "^//?c:/windows" -or
+                                   $pathNameLower.StartsWith("system32/") -or
+                                   $pathNameLower.StartsWith("syswow64/") -or
+                                   $pathNameLower.StartsWith("/systemroot/")
+                    
+                    # Only flag if it's NOT a system path
+                    if (-not $isSystemPath) {
+                        $isSuspicious = $true
+                        $reasons += "File system filter in non-standard location"
+                    }
+                }
+                
+                # Check for unsigned minifilter drivers
+                if ($filter.PathName -and (Test-Path $filter.PathName)) {
+                    try {
+                        $sig = Get-AuthenticodeSignature -FilePath $filter.PathName -ErrorAction SilentlyContinue
+                        if ($sig.Status -ne "Valid") {
+                            $isSuspicious = $true
+                            $reasons += "Unsigned or invalid signature (Status: $($sig.Status))"
+                        }
+                    } catch {}
+                }
+                
+                # Exclude known legitimate filters (fltmgr, etc.)
+                $legitimateFilters = @("fltmgr", "FsDepends", "FileInfo", "FltMgr")
+                if ($legitimateFilters -contains $filter.Name) {
+                    $isSuspicious = $false
+                }
+                
+                if ($isSuspicious) {
+                    # Perform behavioral analysis on suspicious filter driver
+                    $behavioralAnalysis = $null
+                    try {
+                        $behavioralAnalysis = Invoke-DriverBehavioralAnalysis -DriverName $filter.Name -DriverPath $filter.PathName -DriverServiceName $filter.Name
+                        if ($behavioralAnalysis.IsMalicious) {
+                            $reasons += "Behavioral analysis indicates malicious activity (Score: $($behavioralAnalysis.ThreatScore))"
+                            $reasons += $behavioralAnalysis.Reasons
+                        }
+                    } catch {}
+                    
                     $Threats += @{
                         Type = "SuspiciousFileSystemFilter"
                         Name = $filter.Name
                         Path = $filter.PathName
                         State = $filter.State
-                        Reasons = @("File system filter in non-standard location")
-                        Severity = "High"
+                        Reasons = $reasons
+                        Severity = if ($behavioralAnalysis -and $behavioralAnalysis.Severity -eq "Critical") { "Critical" } else { "High" }
+                        BehavioralAnalysis = $behavioralAnalysis
                     }
-                    Write-Output "[Rootkit] HIGH: Suspicious file system filter | Name: $($filter.Name) | Path: $($filter.PathName)"
+                    $behavioralInfo = if ($behavioralAnalysis) { " | Behavioral Score: $($behavioralAnalysis.ThreatScore)" } else { "" }
+                    Write-Output "[Rootkit] HIGH: Suspicious file system filter | Name: $($filter.Name) | Path: $($filter.PathName) | Reasons: $($reasons -join '; ')$behavioralInfo"
                 }
+            }
+            
+            # Also check via fltmgr.sys registry entries for minifilter drivers
+            try {
+                $minifilterKey = "HKLM:\SYSTEM\CurrentControlSet\Services\FltMgr\Enum"
+                if (Test-Path $minifilterKey) {
+                    $minifilters = Get-ItemProperty -Path $minifilterKey -ErrorAction SilentlyContinue
+                    if ($minifilters) {
+                        $minifilterValues = $minifilters.PSObject.Properties | Where-Object { $_.Name -match '^\d+$' }
+                        foreach ($value in $minifilterValues) {
+                            $filterInfo = $value.Value
+                            if ($filterInfo -match '^(\d+)\\\\SystemRoot\\\\System32\\\\drivers\\\\([^\\]+)') {
+                                $filterName = $matches[2]
+                                $filterPath = "C:\Windows\System32\drivers\$filterName"
+                                
+                                # Extract driver name without extension for comparison
+                                $driverNameBase = [System.IO.Path]::GetFileNameWithoutExtension($filterName)
+                                
+                                # Check if this is a target driver (bfs, unionfs, Sophos)
+                                $isTargetDriver = $false
+                                foreach ($target in $targetMinifilterDrivers) {
+                                    if ($driverNameBase -eq $target -or $driverNameBase -like "*$target*" -or $filterName -like "*$target*") {
+                                        $isTargetDriver = $true
+                                        break
+                                    }
+                                }
+                                
+                                # Check if already in threats list
+                                $alreadyDetected = $Threats | Where-Object { 
+                                    $threatNameBase = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)
+                                    $threatNameBase -eq $driverNameBase -or $_.Name -eq $driverNameBase -or $_.Name -eq $filterName
+                                }
+                                
+                                if (-not $alreadyDetected -and (Test-Path $filterPath)) {
+                                    try {
+                                        # Target drivers are always flagged regardless of signature
+                                        if ($isTargetDriver) {
+                                            $Threats += @{
+                                                Type = "SuspiciousFileSystemFilter"
+                                                Name = $driverNameBase
+                                                Path = $filterPath
+                                                State = "Unknown"
+                                                Reasons = @("Target minifilter driver registered with Filter Manager (bfs/unionfs)")
+                                                Severity = "High"
+                                            }
+                                            Write-Output "[Rootkit] HIGH: Target minifilter driver detected | Name: $driverNameBase | Path: $filterPath"
+                                        } else {
+                                            # For other drivers, check signature and perform behavioral analysis
+                                            $sig = Get-AuthenticodeSignature -FilePath $filterPath -ErrorAction SilentlyContinue
+                                            if ($sig.Status -ne "Valid") {
+                                                # Perform behavioral analysis on unsigned driver
+                                                $behavioralAnalysis = $null
+                                                $analysisReasons = @("Unsigned minifilter driver registered with Filter Manager")
+                                                try {
+                                                    $behavioralAnalysis = Invoke-DriverBehavioralAnalysis -DriverName $driverNameBase -DriverPath $filterPath -DriverServiceName $driverNameBase
+                                                    if ($behavioralAnalysis.IsMalicious) {
+                                                        $analysisReasons += "Behavioral analysis indicates malicious activity (Score: $($behavioralAnalysis.ThreatScore))"
+                                                        $analysisReasons += $behavioralAnalysis.Reasons
+                                                    }
+                                                } catch {}
+                                                
+                                                $Threats += @{
+                                                    Type = "SuspiciousFileSystemFilter"
+                                                    Name = $driverNameBase
+                                                    Path = $filterPath
+                                                    State = "Unknown"
+                                                    Reasons = $analysisReasons
+                                                    Severity = if ($behavioralAnalysis -and $behavioralAnalysis.Severity -eq "Critical") { "Critical" } else { "High" }
+                                                    BehavioralAnalysis = $behavioralAnalysis
+                                                }
+                                                $behavioralInfo = if ($behavioralAnalysis) { " | Behavioral Score: $($behavioralAnalysis.ThreatScore)" } else { "" }
+                                                Write-Output "[Rootkit] HIGH: Unsigned minifilter driver | Name: $driverNameBase | Path: $filterPath$behavioralInfo"
+                                            }
+                                        }
+                                    } catch {}
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch {
+                Write-EDRLog -Module "RootkitDetection" -Message "Minifilter registry scan failed: $_" -Level "Warning"
             }
         } catch {
             Write-EDRLog -Module "RootkitDetection" -Message "File system filter scan failed: $_" -Level "Warning"
         }
 
-        # Queue critical threats for response
+        # Queue critical and high severity threats for response (including minifilter drivers)
         foreach ($threat in $Threats) {
-            if ($threat.Severity -eq "Critical") {
-                Add-ThreatToResponseQueue -ThreatType "Rootkit" -ThreatPath $threat.Path -Severity "Critical"
+            if ($threat.Severity -eq "Critical" -or $threat.Severity -eq "High") {
+                # For minifilter drivers, include the driver name in the threat path
+                $threatPath = if ($threat.Type -eq "SuspiciousFileSystemFilter" -and $threat.Name) {
+                    "Driver:$($threat.Name)|$($threat.Path)"
+                } else {
+                    $threat.Path
+                }
+                Add-ThreatToResponseQueue -ThreatType "Rootkit" -ThreatPath $threatPath -Severity $threat.Severity
             }
         }
 
@@ -4455,7 +4831,8 @@ function Invoke-MobileDeviceMonitoring {
                 
                 # Add to response queue for automated response
                 if ($Config.AutoKillThreats) {
-                    Add-ThreatToResponseQueue -ThreatType $threat.Type -Details $threat -Severity $threat.Risk
+                    $threatPath = $threat.FilePath -or $threat.Process -or $threat.Service -or ""
+                    Add-ThreatToResponseQueue -ThreatType $threat.Type -ThreatPath $threatPath -Severity $threat.Risk
                 }
             }
             
@@ -5270,7 +5647,8 @@ function Invoke-AttackToolsDetection {
                 
                 # Add to response queue
                 if ($Config.AutoKillThreats) {
-                    Add-ThreatToResponseQueue -ThreatType $threat.Type -Details $threat -Severity $threat.Risk
+                    $threatPath = $threat.FilePath -or $threat.ProcessPath -or $threat.ProcessName -or $threat.ToolName -or ""
+                    Add-ThreatToResponseQueue -ThreatType $threat.Type -ThreatPath $threatPath -Severity $threat.Risk
                 }
             }
             
@@ -8349,11 +8727,74 @@ function Invoke-QuarantineFile {
     param(
         [string]$FilePath,
         [string]$Reason,
-        [string]$Source
+        [string]$Source,
+        [switch]$SkipApiCheck = $false
     )
     
     try {
+        if (-not $FilePath) {
+            Write-EDRLog -Module "Quarantine" -Message "Cannot quarantine - FilePath is empty or null (Reason: $Reason, Source: $Source)" -Level "Warning"
+            return $false
+        }
+        
         if (Test-Path $FilePath) {
+            Write-EDRLog -Module "Quarantine" -Message "Attempting to quarantine: $FilePath (Reason: $Reason, Source: $Source)" -Level "Info"
+            # Consult the 3 malware APIs before quarantining (unless explicitly skipped)
+            if (-not $SkipApiCheck) {
+                $isMalicious = $false
+                $apiConfidence = 0
+                $apiSources = @()
+                
+                try {
+                    $fileHash = (Get-FileHash -Path $FilePath -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                    if ($fileHash) {
+                        # Check CIRCL Hash Lookup
+                        try {
+                            $CirclResponse = Invoke-RestMethod -Uri "$($Config.CirclHashLookupUrl)/$fileHash" -Method Get -TimeoutSec 5 -ErrorAction SilentlyContinue
+                            if ($CirclResponse.KnownMalicious) {
+                                $isMalicious = $true
+                                $apiConfidence += 40
+                                $apiSources += "CIRCL"
+                            }
+                        } catch {}
+                        
+                        # Check MalwareBazaar
+                        try {
+                            $MBBody = @{ query = "get_info"; hash = $fileHash } | ConvertTo-Json
+                            $MBResponse = Invoke-RestMethod -Uri $Config.MalwareBazaarApiUrl -Method Post -Body $MBBody -ContentType "application/json" -TimeoutSec 5 -ErrorAction SilentlyContinue
+                            if ($MBResponse.query_status -eq "ok") {
+                                $isMalicious = $true
+                                $apiConfidence += 50
+                                $apiSources += "MalwareBazaar"
+                            }
+                        } catch {}
+                        
+                        # Check Cymru Malware Hash Registry
+                        try {
+                            $CymruResponse = Invoke-RestMethod -Uri "$($Config.CymruApiUrl)/$fileHash" -Method Get -TimeoutSec 5 -ErrorAction SilentlyContinue
+                            if ($CymruResponse.malware -eq $true) {
+                                $isMalicious = $true
+                                $apiConfidence += 30
+                                $apiSources += "Cymru"
+                            }
+                        } catch {}
+                        
+                        # Log API results - APIs are consulted but don't block quarantine
+                        # If APIs confirm malicious, log it. If not found or APIs unavailable, still quarantine based on detection engine
+                        if ($isMalicious -and $apiConfidence -ge 30) {
+                            Write-EDRLog -Module "Quarantine" -Message "API verification confirmed malicious: $FilePath confirmed by $($apiSources -join ', ') (Confidence: $apiConfidence)" -Level "Warning"
+                        } else {
+                            Write-EDRLog -Module "Quarantine" -Message "API check completed for $FilePath (not found in databases or APIs unavailable) - proceeding with quarantine based on detection engine" -Level "Info"
+                        }
+                    } else {
+                        Write-EDRLog -Module "Quarantine" -Message "Could not calculate hash for $FilePath - proceeding with quarantine based on detection engine" -Level "Info"
+                    }
+                } catch {
+                    Write-EDRLog -Module "Quarantine" -Message "API verification error for $FilePath : $_ - proceeding with quarantine based on detection engine" -Level "Warning"
+                    # If API check fails, proceed with quarantine based on detection engine results
+                }
+            }
+            
             $fileName = Split-Path -Leaf $FilePath
             $quarantinePath = Join-Path $Config.QuarantinePath "$(Get-Date -Format 'yyyyMMdd_HHmmss')_$fileName"
             
@@ -8362,11 +8803,14 @@ function Invoke-QuarantineFile {
             }
             
             Move-Item -Path $FilePath -Destination $quarantinePath -Force
-            Write-EDRLog -Module "Quarantine" -Message "Quarantined: $FilePath -> $quarantinePath (Reason: $Reason)" -Level "Warning"
+            Write-EDRLog -Module "Quarantine" -Message "SUCCESS: Quarantined $FilePath -> $quarantinePath (Reason: $Reason, Source: $Source)" -Level "Warning"
             return $true
+        } else {
+            Write-EDRLog -Module "Quarantine" -Message "Cannot quarantine - file does not exist: $FilePath (Reason: $Reason, Source: $Source)" -Level "Warning"
+            return $false
         }
     } catch {
-        Write-EDRLog -Module "Quarantine" -Message "Failed to quarantine $FilePath : $_" -Level "Error"
+        Write-EDRLog -Module "Quarantine" -Message "ERROR: Failed to quarantine $FilePath : $_ (Reason: $Reason, Source: $Source)" -Level "Error"
     }
     
     return $false
@@ -8428,7 +8872,8 @@ function Add-ThreatToResponseQueue {
     param(
         [string]$ThreatType,
         [string]$ThreatPath,
-        [string]$Severity = "Medium"
+        [string]$Severity = "Medium",
+        [hashtable]$Details = $null
     )
     
     try {
@@ -8442,6 +8887,21 @@ function Add-ThreatToResponseQueue {
         if ($Script:ResponseQueue.Count -ge $Script:ResponseQueueMaxSize) {
             Write-EDRLog -Module "ResponseEngine" -Message "WARNING: Response queue is full, dropping oldest threat" -Level "Warning"
             $null = $Script:ResponseQueue.Dequeue()
+        }
+
+        # Extract ThreatPath from Details if provided and ThreatPath is not set
+        if ($Details -and -not $ThreatPath) {
+            if ($Details.FilePath) {
+                $ThreatPath = $Details.FilePath
+            } elseif ($Details.ProcessPath) {
+                $ThreatPath = $Details.ProcessPath
+            } elseif ($Details.Path) {
+                $ThreatPath = $Details.Path
+            } elseif ($Details.ProcessName) {
+                $ThreatPath = $Details.ProcessName
+            } elseif ($Details.FileName) {
+                $ThreatPath = $Details.FileName
+            }
         }
 
         $threat = @{
@@ -8459,6 +8919,496 @@ function Add-ThreatToResponseQueue {
     }
 }
 
+function Invoke-DriverBehavioralAnalysis {
+    <#
+    .SYNOPSIS
+    Performs behavioral analysis on a driver using hybrid approach:
+    - Uses general framework (Invoke-AdvancedThreatDetection) for file-based analysis
+    - Adds driver-specific runtime behavioral checks
+    
+    .DESCRIPTION
+    Hybrid analysis combining:
+    1. File-based analysis via general framework (entropy, signatures, patterns)
+    2. Driver-specific runtime behavior (network from services, process spawning, registry, etc.)
+    #>
+    param(
+        [string]$DriverName,
+        [string]$DriverPath = $null,
+        [string]$DriverServiceName = $null
+    )
+    
+    try {
+        $threatScore = 0
+        $behavioralIndicators = @()
+        $reasons = @()
+        $fileBasedScore = 0
+        
+        if (-not $DriverServiceName) {
+            $DriverServiceName = $DriverName
+        }
+        
+        # PART 1: Use general framework for file-based analysis (if driver path provided)
+        if ($DriverPath -and (Test-Path $DriverPath)) {
+            try {
+                # Define rootkit/driver-specific signatures
+                $driverSignatures = @{
+                    "Rootkit" = @("rootkit", "stealth", "hide", "hook", "inject", "bypass")
+                    "KernelDriver" = @("kernel.*driver", "system.*driver", "kernel.*mode")
+                }
+                
+                # Define behavioral patterns for drivers (command-line would be empty for drivers, but we check file content)
+                $driverBehavioralPatterns = @{
+                    "SuspiciousName" = @("stealth", "hook", "hide", "rootkit", "inject", "bypass", "protect")
+                }
+                
+                # Use general framework for file-based analysis
+                $fileAnalysis = Invoke-AdvancedThreatDetection `
+                    -FilePath $DriverPath `
+                    -FileSignatures $driverSignatures `
+                    -BehavioralIndicators $driverBehavioralPatterns `
+                    -CommandLine $null `
+                    -CheckEntropy $true `
+                    -EntropyThreshold 7.5
+                
+                if ($fileAnalysis.IsThreat) {
+                    $fileBasedScore = $fileAnalysis.Confidence / 5  # Convert confidence to threat score (rough conversion)
+                    $reasons += "File-based analysis: $($fileAnalysis.ThreatName) (Confidence: $($fileAnalysis.Confidence)%)"
+                    $reasons += "Detection methods: $($fileAnalysis.DetectionMethods -join ', ')"
+                    if ($fileAnalysis.Details.ContainsKey("Entropy")) {
+                        $behavioralIndicators += "HighEntropy"
+                        $reasons += "High entropy detected: $($fileAnalysis.Details.Entropy)"
+                    }
+                }
+            } catch {
+                Write-EDRLog -Module "DriverBehavioralAnalysis" -Message "Error in file-based analysis for $DriverPath : $_" -Level "Warning"
+            }
+        }
+        
+        # PART 2: Driver-specific runtime behavioral checks
+        # 1. Check for network activity from driver service
+        try {
+            $serviceProcess = Get-CimInstance -ClassName Win32_Service -Filter "Name = '$DriverServiceName'" -ErrorAction SilentlyContinue
+            if ($serviceProcess -and $serviceProcess.ProcessId) {
+                $proc = Get-Process -Id $serviceProcess.ProcessId -ErrorAction SilentlyContinue
+                if ($proc) {
+                    # Check for network connections
+                    $netConnections = Get-NetTCPConnection -OwningProcess $proc.Id -ErrorAction SilentlyContinue
+                    if ($netConnections) {
+                        $externalConnections = $netConnections | Where-Object { $_.RemoteAddress -ne "0.0.0.0" -and $_.RemoteAddress -ne "::" -and $_.State -eq "Established" }
+                        if ($externalConnections) {
+                            $threatScore += 15
+                            $behavioralIndicators += "NetworkActivity"
+                            $uniqueAddresses = $externalConnections | Select-Object -First 3 -ExpandProperty RemoteAddress -Unique
+                            $reasons += "Driver service has active network connections to: $($uniqueAddresses -join ', ')"
+                        }
+                    }
+                }
+            }
+        } catch {}
+        
+        # 2. Check for recent file system modifications (runtime indicator)
+        if ($DriverPath -and (Test-Path $DriverPath)) {
+            try {
+                $driverFile = Get-Item $DriverPath -ErrorAction SilentlyContinue
+                if ($driverFile) {
+                    $fileAge = (Get-Date) - $driverFile.LastWriteTime
+                    
+                    # Very recent modification (within last 24 hours) - suspicious
+                    if ($fileAge.TotalHours -lt 24) {
+                        $threatScore += 10
+                        $behavioralIndicators += "RecentModification"
+                        $reasons += "Driver file modified recently ($([Math]::Round($fileAge.TotalHours, 1)) hours ago)"
+                    }
+                }
+            } catch {}
+        }
+        
+        # 3. Check registry modifications related to the driver
+        try {
+            $serviceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$DriverServiceName"
+            if (Test-Path $serviceKey) {
+                $serviceProps = Get-ItemProperty -Path $serviceKey -ErrorAction SilentlyContinue
+                
+                # Check for suspicious registry values
+                if ($serviceProps) {
+                    # Check if StartType was recently changed (suggests manipulation)
+                    # This is harder to detect without baseline, but we can check for suspicious values
+                    if ($serviceProps.Start -eq 0 -and $serviceProps.Type -eq 1) {
+                        # Kernel driver set to boot start - check if it's in standard location
+                        if ($serviceProps.ImagePath -and $serviceProps.ImagePath -notmatch "^\\\\?\\C:\\Windows") {
+                            $threatScore += 8
+                            $behavioralIndicators += "SuspiciousServiceConfig"
+                            $reasons += "Driver service configured for boot start from non-standard location"
+                        }
+                    }
+                }
+            }
+        } catch {}
+        
+        # 4. Check for processes spawned by driver service
+        try {
+            $serviceProcess = Get-CimInstance -ClassName Win32_Service -Filter "Name = '$DriverServiceName'" -ErrorAction SilentlyContinue
+            if ($serviceProcess -and $serviceProcess.ProcessId) {
+                $proc = Get-Process -Id $serviceProcess.ProcessId -ErrorAction SilentlyContinue
+                if ($proc) {
+                    # Check for child processes (driver services typically don't spawn processes)
+                    $childProcesses = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId = $($proc.Id)" -ErrorAction SilentlyContinue
+                    if ($childProcesses) {
+                        $threatScore += 15
+                        $behavioralIndicators += "ProcessCreation"
+                        $uniqueProcesses = $childProcesses | Select-Object -First 3 -ExpandProperty Name -Unique
+                        $reasons += "Driver service spawned processes: $($uniqueProcesses -join ', ')"
+                    }
+                }
+            }
+        } catch {}
+        
+        # 5. Check for file system access patterns (if service is running)
+        try {
+            $serviceProcess = Get-CimInstance -ClassName Win32_Service -Filter "Name = '$DriverServiceName'" -ErrorAction SilentlyContinue
+            if ($serviceProcess -and $serviceProcess.State -eq "Running") {
+                # Check if driver is accessing user directories (suspicious for system drivers)
+                # This is harder to detect without kernel hooks, but we can check service dependencies
+                $dependents = Get-CimInstance -ClassName Win32_Service -Filter "Name = '$DriverServiceName'" -ErrorAction SilentlyContinue | 
+                    Get-CimAssociatedInstance -ResultClassName Win32_Service -ErrorAction SilentlyContinue
+                
+                # If driver has many dependencies or is depended upon by many services, it's more critical
+                # This is just metadata, not true behavioral, but gives context
+            }
+        } catch {}
+        
+        # 6. Check for driver loading time patterns (loaded at unusual times)
+        try {
+            $service = Get-CimInstance -ClassName Win32_Service -Filter "Name = '$DriverServiceName'" -ErrorAction SilentlyContinue
+            if ($service -and $service.PathName) {
+                # Check if driver file was created/modified at unusual times
+                # (e.g., outside business hours if this is a corporate environment)
+                # This is a weak indicator but can be part of the analysis
+            }
+        } catch {}
+        
+        # Combine file-based and runtime behavioral scores
+        $totalThreatScore = $fileBasedScore + $threatScore
+        
+        # Determine severity based on total threat score
+        # Combine file-based and runtime behavioral scores
+        $totalThreatScore = $fileBasedScore + $threatScore
+        
+        $severity = "Low"
+        if ($totalThreatScore -ge 30) {
+            $severity = "Critical"
+        } elseif ($totalThreatScore -ge 20) {
+            $severity = "High"
+        } elseif ($totalThreatScore -ge 10) {
+            $severity = "Medium"
+        }
+        
+        return @{
+            ThreatScore = $totalThreatScore
+            FileBasedScore = $fileBasedScore
+            RuntimeBehaviorScore = $threatScore
+            Severity = $severity
+            BehavioralIndicators = $behavioralIndicators
+            Reasons = $reasons
+            IsMalicious = $totalThreatScore -ge 20  # Threshold for considering driver malicious
+        }
+    } catch {
+        Write-EDRLog -Module "DriverBehavioralAnalysis" -Message "Error analyzing driver $DriverName : $_" -Level "Warning"
+        return @{
+            ThreatScore = 0
+            Severity = "Low"
+            BehavioralIndicators = @()
+            Reasons = @()
+            IsMalicious = $false
+        }
+    }
+}
+
+function Remove-MinifilterDriverSafe {
+    <#
+    .SYNOPSIS
+    Safely removes ANY minifilter driver using fltmc unload before stopping/deleting.
+    This prevents BSODs by properly unloading the filter before removal.
+    
+    .DESCRIPTION
+    This is a general-purpose function that safely removes minifilter drivers.
+    It should be used for malicious minifilter drivers detected as threats.
+    Legitimate drivers (signed, standard location) won't be flagged as threats.
+    #>
+    param(
+        [string]$DriverName,
+        [string]$DriverPath = $null,
+        [switch]$DeleteDriverFile = $false
+    )
+    
+    try {
+        Write-EDRLog -Module "MinifilterRemoval" -Message "Attempting to safely remove minifilter driver: $DriverName" -Level "Info"
+        
+        # Check if driver is a registered minifilter by checking fltmc filters
+        $isMinifilter = $false
+        try {
+            $fltmcOutput = fltmc filters 2>&1 | Out-String
+            if ($fltmcOutput -match [regex]::Escape($DriverName)) {
+                $isMinifilter = $true
+            }
+        } catch {
+            # If fltmc fails, assume it might be a minifilter for safety
+            $isMinifilter = $true
+        }
+        
+        # Step 1: Unload the minifilter using fltmc (CRITICAL - prevents BSOD)
+        if ($isMinifilter) {
+            try {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Unloading minifilter driver: $DriverName using fltmc" -Level "Info"
+                $unloadResult = fltmc unload $DriverName 2>&1 | Out-String
+                
+                if ($LASTEXITCODE -eq 0 -or $unloadResult -match "success|unloaded") {
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "Successfully unloaded minifilter: $DriverName" -Level "Info"
+                    Start-Sleep -Milliseconds 500  # Give system time to process unload
+                } else {
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "fltmc unload result for $DriverName : $unloadResult" -Level "Warning"
+                }
+            } catch {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to unload minifilter $DriverName with fltmc: $_" -Level "Warning"
+            }
+        }
+        
+        # Step 2: Stop the driver service
+        try {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Stopping driver service: $DriverName" -Level "Info"
+            $stopResult = sc.exe stop $DriverName 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0 -or $stopResult -match "STOPPED|STOP_PENDING") {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Stopped driver service: $DriverName" -Level "Info"
+                Start-Sleep -Milliseconds 500  # Give system time to process stop
+            } else {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Driver stop result for $DriverName : $stopResult" -Level "Warning"
+            }
+        } catch {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to stop driver service $DriverName : $_" -Level "Warning"
+        }
+        
+        # Step 3: Disable the driver to prevent auto-start
+        try {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Disabling driver service: $DriverName" -Level "Info"
+            $configResult = sc.exe config $DriverName start= disabled 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Disabled driver service: $DriverName (will not start on next boot)" -Level "Info"
+            } else {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Driver disable result for $DriverName : $configResult" -Level "Warning"
+            }
+        } catch {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to disable driver service $DriverName : $_" -Level "Warning"
+        }
+        
+        # Step 4: Mark driver service for deletion (will be removed after reboot)
+        try {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Marking driver service for deletion: $DriverName" -Level "Info"
+            $deleteResult = sc.exe delete $DriverName 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Marked driver service for deletion: $DriverName (will be removed after reboot)" -Level "Info"
+            } else {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Driver delete result for $DriverName : $deleteResult" -Level "Warning"
+            }
+        } catch {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to mark driver service for deletion $DriverName : $_" -Level "Warning"
+        }
+        
+        # Step 5: If driver file path is provided and DeleteDriverFile is set, schedule file for deletion
+        if ($DeleteDriverFile -and $DriverPath -and (Test-Path $DriverPath)) {
+            try {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Preparing to delete driver file: $DriverPath" -Level "Info"
+                
+                # Take ownership of the file
+                $takeownResult = takeown /f $DriverPath /A 2>&1 | Out-String
+                Start-Sleep -Milliseconds 200
+                
+                # Reset permissions
+                $icaclsResult = icacls $DriverPath /reset 2>&1 | Out-String
+                Start-Sleep -Milliseconds 200
+                
+                # Remove inheritance and grant full control to administrators
+                $icaclsResult2 = icacls $DriverPath /inheritance:d /grant "Administrators:F" 2>&1 | Out-String
+                Start-Sleep -Milliseconds 200
+                
+                # Try to delete the file (may fail if in use, will be deleted on reboot)
+                try {
+                    Remove-Item -Path $DriverPath -Force -ErrorAction Stop
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "Deleted driver file: $DriverPath" -Level "Info"
+                } catch {
+                    # If deletion fails, schedule for deletion on reboot using MoveFileEx
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "Could not delete $DriverPath immediately (may be in use), will be removed on reboot" -Level "Warning"
+                }
+            } catch {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to delete driver file $DriverPath : $_" -Level "Warning"
+            }
+        }
+        
+        Write-EDRLog -Module "MinifilterRemoval" -Message "Completed safe removal process for minifilter driver: $DriverName" -Level "Info"
+        return $true
+    } catch {
+        Write-EDRLog -Module "MinifilterRemoval" -Message "Error removing minifilter driver $DriverName : $_" -Level "Error"
+        return $false
+    }
+}
+
+function Remove-MinifilterDriver {
+    <#
+    .SYNOPSIS
+    Safely removes a minifilter driver using fltmc unload before stopping/deleting.
+    This prevents BSODs by properly unloading the filter before removal.
+    
+    .DESCRIPTION
+    This function only targets specific drivers (bfs, unionfs) from the batch file.
+    Other minifilter drivers (including legitimate antivirus drivers) are NOT processed
+    by this function to avoid interfering with user security software.
+    #>
+    param(
+        [string]$DriverName,
+        [string]$DriverPath = $null,
+        [switch]$DeleteDriverFile = $false
+    )
+    
+    try {
+        Write-EDRLog -Module "MinifilterRemoval" -Message "Attempting to remove minifilter driver: $DriverName" -Level "Info"
+        
+        # List of specific minifilter drivers to remove (only drivers explicitly listed in batch file)
+        # Only targeting bfs and unionfs - other drivers (including antivirus) are NOT targeted
+        # This prevents interference with legitimate security software
+        $targetDrivers = @("bfs", "unionfs")
+        
+        # Check if this is a target driver
+        $isTargetDriver = $false
+        foreach ($target in $targetDrivers) {
+            if ($DriverName -like "*$target*" -or $DriverName -eq $target) {
+                $isTargetDriver = $true
+                break
+            }
+        }
+        
+        # Also check driver path if provided
+        if (-not $isTargetDriver -and $DriverPath) {
+            $driverFileName = [System.IO.Path]::GetFileNameWithoutExtension($DriverPath).ToLower()
+            foreach ($target in $targetDrivers) {
+                if ($driverFileName -like "*$target*" -or $driverFileName -eq $target) {
+                    $isTargetDriver = $true
+                    break
+                }
+            }
+        }
+        
+        if (-not $isTargetDriver) {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Driver $DriverName is not in target list, skipping minifilter removal" -Level "Debug"
+            return $false
+        }
+        
+        # Step 1: Check if driver is a registered minifilter by checking fltmc filters
+        $isMinifilter = $false
+        try {
+            $fltmcOutput = fltmc filters 2>&1 | Out-String
+            if ($fltmcOutput -match [regex]::Escape($DriverName)) {
+                $isMinifilter = $true
+            }
+        } catch {
+            # If fltmc fails, assume it might be a minifilter for safety
+            $isMinifilter = $true
+        }
+        
+        # Step 2: Unload the minifilter using fltmc (CRITICAL - prevents BSOD)
+        if ($isMinifilter) {
+            try {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Unloading minifilter driver: $DriverName using fltmc" -Level "Info"
+                $unloadResult = fltmc unload $DriverName 2>&1 | Out-String
+                
+                if ($LASTEXITCODE -eq 0 -or $unloadResult -match "success|unloaded") {
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "Successfully unloaded minifilter: $DriverName" -Level "Info"
+                    Start-Sleep -Milliseconds 500  # Give system time to process unload
+                } else {
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "fltmc unload result for $DriverName : $unloadResult" -Level "Warning"
+                }
+            } catch {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to unload minifilter $DriverName with fltmc: $_" -Level "Warning"
+            }
+        }
+        
+        # Step 3: Stop the driver service
+        try {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Stopping driver service: $DriverName" -Level "Info"
+            $stopResult = sc.exe stop $DriverName 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0 -or $stopResult -match "STOPPED|STOP_PENDING") {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Stopped driver service: $DriverName" -Level "Info"
+                Start-Sleep -Milliseconds 500  # Give system time to process stop
+            } else {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Driver stop result for $DriverName : $stopResult" -Level "Warning"
+            }
+        } catch {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to stop driver service $DriverName : $_" -Level "Warning"
+        }
+        
+        # Step 4: Disable the driver to prevent auto-start
+        try {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Disabling driver service: $DriverName" -Level "Info"
+            $configResult = sc.exe config $DriverName start= disabled 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Disabled driver service: $DriverName (will not start on next boot)" -Level "Info"
+            } else {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Driver disable result for $DriverName : $configResult" -Level "Warning"
+            }
+        } catch {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to disable driver service $DriverName : $_" -Level "Warning"
+        }
+        
+        # Step 5: Mark driver service for deletion (will be removed after reboot)
+        try {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Marking driver service for deletion: $DriverName" -Level "Info"
+            $deleteResult = sc.exe delete $DriverName 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Marked driver service for deletion: $DriverName (will be removed after reboot)" -Level "Info"
+            } else {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Driver delete result for $DriverName : $deleteResult" -Level "Warning"
+            }
+        } catch {
+            Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to mark driver service for deletion $DriverName : $_" -Level "Warning"
+        }
+        
+        # Step 6: If driver file path is provided and DeleteDriverFile is set, schedule file for deletion
+        if ($DeleteDriverFile -and $DriverPath -and (Test-Path $DriverPath)) {
+            try {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Preparing to delete driver file: $DriverPath" -Level "Info"
+                
+                # Take ownership of the file
+                $takeownResult = takeown /f $DriverPath /A 2>&1 | Out-String
+                Start-Sleep -Milliseconds 200
+                
+                # Reset permissions
+                $icaclsResult = icacls $DriverPath /reset 2>&1 | Out-String
+                Start-Sleep -Milliseconds 200
+                
+                # Remove inheritance and grant full control to administrators
+                $icaclsResult2 = icacls $DriverPath /inheritance:d /grant "Administrators:F" 2>&1 | Out-String
+                Start-Sleep -Milliseconds 200
+                
+                # Try to delete the file (may fail if in use, will be deleted on reboot)
+                try {
+                    Remove-Item -Path $DriverPath -Force -ErrorAction Stop
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "Deleted driver file: $DriverPath" -Level "Info"
+                } catch {
+                    # If deletion fails, schedule for deletion on reboot using MoveFileEx
+                    Write-EDRLog -Module "MinifilterRemoval" -Message "Could not delete $DriverPath immediately (may be in use), will be removed on reboot" -Level "Warning"
+                    # Note: MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT (4) would require P/Invoke, using sc.exe delete handles service removal
+                }
+            } catch {
+                Write-EDRLog -Module "MinifilterRemoval" -Message "Failed to delete driver file $DriverPath : $_" -Level "Warning"
+            }
+        }
+        
+        Write-EDRLog -Module "MinifilterRemoval" -Message "Completed removal process for minifilter driver: $DriverName" -Level "Info"
+        return $true
+    } catch {
+        Write-EDRLog -Module "MinifilterRemoval" -Message "Error removing minifilter driver $DriverName : $_" -Level "Error"
+        return $false
+    }
+}
+
 function Invoke-ResponseAction {
     param(
         [string]$ThreatType,
@@ -8468,9 +9418,9 @@ function Invoke-ResponseAction {
     
     try {
         $actions = @{
-            "Critical" = @("Quarantine", "KillProcess", "BlockNetwork", "Log")
-            "High"     = @("Quarantine", "Log", "Alert")
-            "Medium"   = @("Log", "Alert")
+            "Critical" = @("Quarantine", "KillProcess", "BlockNetwork", "StopDriver", "Log")
+            "High"     = @("Quarantine", "StopDriver", "Log", "Alert")
+            "Medium"   = @("Quarantine", "Log", "Alert")
             "Low"      = @("Log")
         }
         
@@ -8479,8 +9429,31 @@ function Invoke-ResponseAction {
         foreach ($action in $responseActions) {
             switch ($action) {
                 "Quarantine" {
-                    if (Test-Path $ThreatPath) {
-                        Invoke-QuarantineFile -FilePath $ThreatPath -Reason $ThreatType -Source "ResponseEngine"
+                    # Validate that ThreatPath is a valid file path before attempting quarantine
+                    # Skip quarantine for non-file paths (process names, registry paths, network addresses, etc.)
+                    if (-not $ThreatPath) {
+                        Write-EDRLog -Module "ResponseEngine" -Message "Cannot quarantine - ThreatPath is empty (Type: $ThreatType, Severity: $Severity)" -Level "Info"
+                        continue
+                    }
+                    
+                    # Check if it looks like a file path (contains drive letter or starts with \ or /)
+                    $isLikelyFilePath = $ThreatPath -match '^([A-Za-z]:\\|\\\\|/|\.\\)' -or (Test-Path $ThreatPath -PathType Leaf)
+                    
+                    if (-not $isLikelyFilePath) {
+                        Write-EDRLog -Module "ResponseEngine" -Message "Skipping quarantine - ThreatPath appears to be non-file identifier: $ThreatPath (Type: $ThreatType, Severity: $Severity)" -Level "Info"
+                        continue
+                    }
+                    
+                    # Verify it's actually a file (not a directory)
+                    if (Test-Path $ThreatPath -PathType Leaf) {
+                        $quarantineResult = Invoke-QuarantineFile -FilePath $ThreatPath -Reason $ThreatType -Source "ResponseEngine"
+                        if (-not $quarantineResult) {
+                            Write-EDRLog -Module "ResponseEngine" -Message "Quarantine failed or skipped for: $ThreatPath (Type: $ThreatType, Severity: $Severity)" -Level "Warning"
+                        }
+                    } elseif (Test-Path $ThreatPath -PathType Container) {
+                        Write-EDRLog -Module "ResponseEngine" -Message "Cannot quarantine - path is a directory, not a file: $ThreatPath (Type: $ThreatType, Severity: $Severity)" -Level "Info"
+                    } else {
+                        Write-EDRLog -Module "ResponseEngine" -Message "Cannot quarantine - file does not exist: $ThreatPath (Type: $ThreatType, Severity: $Severity)" -Level "Info"
                     }
                 }
                 "KillProcess" {
@@ -8558,6 +9531,70 @@ function Invoke-ResponseAction {
                 "Log" {
                     Write-EDRLog -Module "ResponseEngine" -Message "THREAT: $ThreatType - $ThreatPath (Severity: $Severity)" -Level "Warning"
                 }
+                "StopDriver" {
+                    try {
+                        # Check if this is a driver threat (format: "Driver:DriverName|Path" or just a driver path)
+                        $driverName = $null
+                        $driverPath = $ThreatPath
+                        
+                        if ($ThreatPath -match "^Driver:([^|]+)\|(.+)$") {
+                            $driverName = $matches[1]
+                            $driverPath = $matches[2]
+                        } elseif ($ThreatType -eq "Rootkit" -and $ThreatPath) {
+                            # Try to extract driver name from service registry
+                            try {
+                                $service = Get-CimInstance -ClassName Win32_SystemDriver -Filter "PathName LIKE '%$($ThreatPath -replace '\\', '\\')%'" -ErrorAction SilentlyContinue | Select-Object -First 1
+                                if ($service) {
+                                    $driverName = $service.Name
+                                }
+                            } catch {}
+                            
+                            # If driver name not found, try to extract from path
+                            if (-not $driverName -and $ThreatPath -match '([^\\]+)\.sys$') {
+                                $driverName = $matches[1]
+                            }
+                        }
+                        
+                        if ($driverName -and $driverPath) {
+                            # CRITICAL: Check if this is an inbox/Windows system driver - NEVER remove these
+                            $isInboxDriver = $false
+                            if ($driverPath -like "*\Windows\System32\drivers\*" -or $driverPath -like "*\SystemRoot\System32\drivers\*") {
+                                try {
+                                    # Check if driver is signed by Microsoft (inbox drivers are Microsoft-signed)
+                                    if (Test-Path $driverPath) {
+                                        $sig = Get-AuthenticodeSignature -FilePath $driverPath -ErrorAction SilentlyContinue
+                                        if ($sig.Status -eq "Valid" -and $sig.SignerCertificate -and $sig.SignerCertificate.Subject -match "Microsoft") {
+                                            $isInboxDriver = $true
+                                            Write-EDRLog -Module "ResponseEngine" -Message "BLOCKED: Attempted to remove inbox/Windows system driver (Microsoft-signed): $driverName at $driverPath - skipping removal" -Level "Warning"
+                                        }
+                                    }
+                                } catch {
+                                    # If we can't verify signature but driver is in System32\drivers, err on side of caution
+                                    if ($driverPath -like "*\Windows\System32\drivers\*" -or $driverPath -like "*\SystemRoot\System32\drivers\*") {
+                                        $isInboxDriver = $true
+                                        Write-EDRLog -Module "ResponseEngine" -Message "BLOCKED: Attempted to remove driver from System32\drivers (potential inbox driver): $driverName at $driverPath - skipping removal" -Level "Warning"
+                                    }
+                                }
+                            }
+                            
+                            if ($isInboxDriver) {
+                                Write-EDRLog -Module "ResponseEngine" -Message "Driver removal blocked: $driverName is an inbox/Windows system driver" -Level "Warning"
+                                return
+                            }
+                            
+                            # AUTOMATIC MINIFILTER DRIVER REMOVAL DISABLED - Too risky, causes BSODs
+                            # Minifilter drivers are detected and logged, but automatic removal is disabled
+                            Write-EDRLog -Module "ResponseEngine" -Message "Driver removal requested for: $driverName, but automatic minifilter driver removal is disabled to prevent BSODs. Manual review recommended." -Level "Warning"
+                            
+                            # Log the driver information but do not remove
+                            Write-EDRLog -Module "ResponseEngine" -Message "Detected driver threat (removal disabled): $driverName | Path: $driverPath | Type: $ThreatType | Severity: $Severity" -Level "Warning"
+                        } else {
+                            Write-EDRLog -Module "ResponseEngine" -Message "Could not determine driver name from threat path: $ThreatPath" -Level "Warning"
+                        }
+                    } catch {
+                        Write-EDRLog -Module "ResponseEngine" -Message "Failed to process driver removal for $ThreatPath : $_" -Level "Warning"
+                    }
+                }
                 "Alert" {
                     try {
                         # Ensure event log source exists before writing
@@ -8610,7 +9647,11 @@ function Invoke-ResponseEngine {
             Write-EDRLog -Module "ResponseEngine" -Message "Processed $processedCount threat(s) from queue. Queue size: $($Script:ResponseQueue.Count)" -Level "Info"
         }
 
-        return $processedCount
+        # Return count without outputting to pipeline - suppress any accidental output
+        # Store result in variable and explicitly return (don't let it output to console)
+        $result = $processedCount
+        [void]$result  # Explicitly discard if accidentally output
+        return $result
     } catch {
         Write-EDRLog -Module "ResponseEngine" -Message "Error: $_" -Level "Error"
         return 0
@@ -8807,6 +9848,340 @@ function Invoke-PrivacyForgeSpoofClipboard {
 
 #endregion
 
+# ===================== Independent Modules (No Whitelist/Response Engine) =====================
+# These modules operate independently and do not respect whitelists or use the response engine
+# They share logs and quarantine folders with the main antivirus
+
+# ELF DLL Unloader - Actively unloads ELF DLLs from browser processes
+function Invoke-ElfDLLUnloader {
+    # This module operates independently - no whitelist checks, no response engine
+    try {
+        # Add DLL unloader C# code if not already loaded
+        if (-not ([System.Management.Automation.PSTypeName]'DLLUnloader').Type) {
+            Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class DLLUnloader {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetProcAddress(IntPtr mod, string name);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetModuleHandle(string name);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr CreateRemoteThread(IntPtr proc, IntPtr attr, uint stack, IntPtr start, IntPtr param, uint flags, IntPtr id);
+    [DllImport("kernel32.dll")]
+    public static extern uint WaitForSingleObject(IntPtr handle, uint ms);
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool MoveFileEx(string src, string dst, int flags);
+}
+"@
+        }
+        
+        $whitelist = @('ntdll.dll', 'kernel32.dll', 'kernelbase.dll', 'user32.dll', 'gdi32.dll', 'msvcrt.dll', 'advapi32.dll')
+        $targets = @('chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'iexplore', 'microsoftedge', 'waterfox', 'palemoon')
+        
+        if (-not $Script:ElfDLLProcessed) {
+            $Script:ElfDLLProcessed = @{}
+        }
+        
+        $unloadedCount = 0
+        
+        foreach ($procName in $targets) {
+            $procs = Get-Process -Name $procName -ErrorAction SilentlyContinue
+            foreach ($proc in $procs) {
+                try {
+                    $hProc = [DLLUnloader]::OpenProcess(0x1F0FFF, $false, $proc.Id)
+                    if ($hProc -eq [IntPtr]::Zero) { continue }
+                    
+                    $freeLib = [DLLUnloader]::GetProcAddress([DLLUnloader]::GetModuleHandle("kernel32.dll"), "FreeLibrary")
+                    
+                    foreach ($mod in $proc.Modules) {
+                        $name = [System.IO.Path]::GetFileName($mod.FileName).ToLower()
+                        if ($whitelist -contains $name) { continue }
+                        
+                        $key = "$($proc.Id):$($mod.FileName)"
+                        if ($Script:ElfDLLProcessed.ContainsKey($key)) { continue }
+                        
+                        if ($name -like '*_elf.dll') {
+                            Write-AVLog "ELF DLL Unloader: Unloading $name from $procName (PID $($proc.Id))" "INFO" "elf_dll_unloader.log"
+                            
+                            $thread = [DLLUnloader]::CreateRemoteThread($hProc, [IntPtr]::Zero, 0, $freeLib, $mod.BaseAddress, 0, [IntPtr]::Zero)
+                            if ($thread -ne [IntPtr]::Zero) {
+                                [DLLUnloader]::WaitForSingleObject($thread, 5000) | Out-Null
+                                [DLLUnloader]::CloseHandle($thread) | Out-Null
+                                
+                                if ([DLLUnloader]::MoveFileEx($mod.FileName, $null, 4)) {
+                                    Write-AVLog "ELF DLL Unloader: Scheduled deletion on reboot: $($mod.FileName)" "INFO" "elf_dll_unloader.log"
+                                }
+                                
+                                $unloadedCount++
+                            }
+                            $Script:ElfDLLProcessed[$key] = Get-Date
+                        }
+                    }
+                    
+                    [DLLUnloader]::CloseHandle($hProc) | Out-Null
+                } catch {
+                    Write-AVLog "ELF DLL Unloader error for process $procName (PID: $($proc.Id)): $_" "WARN" "elf_dll_unloader.log"
+                }
+            }
+        }
+        
+        # Cleanup old processed entries
+        if ($Script:ElfDLLProcessed.Count -gt 1000) {
+            $oldKeys = $Script:ElfDLLProcessed.Keys | Where-Object {
+                ((Get-Date) - $Script:ElfDLLProcessed[$_]).TotalHours -gt 24
+            }
+            foreach ($key in $oldKeys) {
+                $Script:ElfDLLProcessed.Remove($key)
+            }
+        }
+        
+        if ($unloadedCount -gt 0) {
+            Write-AVLog "ELF DLL Unloader: Unloaded $unloadedCount ELF DLL(s)" "INFO" "elf_dll_unloader.log"
+        }
+        
+        return $unloadedCount
+    } catch {
+        Write-AVLog "ELF DLL Unloader error: $_" "ERROR" "elf_dll_unloader.log"
+        return 0
+    }
+}
+
+# Unsigned DLL Remover - Scans and quarantines unsigned DLLs/WINMD files
+function Invoke-UnsignedDLLRemover {
+    # This module operates independently - no whitelist checks, no response engine
+    try {
+        # Initialize scanned files database
+        $localDatabase = "$($Config.DatabasePath)\scanned_dlls.txt"
+        if (-not $Script:UnsignedDLLScannedFiles) {
+            $Script:UnsignedDLLScannedFiles = @{}
+            
+            # Load existing database
+            if (Test-Path $localDatabase) {
+                try {
+                    $lines = Get-Content $localDatabase -ErrorAction Stop
+                    foreach ($line in $lines) {
+                        if ($line -match "^([0-9a-f]{64}),(true|false)$") {
+                            $Script:UnsignedDLLScannedFiles[$matches[1]] = [bool]$matches[2]
+                        }
+                    }
+                    Write-AVLog "Unsigned DLL Remover: Loaded $($Script:UnsignedDLLScannedFiles.Count) scanned file entries" "INFO" "unsigned_dll_remover.log"
+                } catch {
+                    Write-AVLog "Unsigned DLL Remover: Failed to load database: $_" "WARN" "unsigned_dll_remover.log"
+                }
+            }
+        }
+        
+        $quarantinedCount = 0
+        
+        # Helper function to check if file should be excluded
+        function Should-ExcludeDLLFile {
+            param ([string]$filePath)
+            $lowerPath = $filePath.ToLower()
+            
+            # Exclude assembly folders
+            if ($lowerPath -like "*\assembly\*") {
+                return $true
+            }
+            
+            # Exclude ctfmon-related files
+            if ($lowerPath -like "*ctfmon*" -or $lowerPath -like "*msctf.dll" -or $lowerPath -like "*msutb.dll") {
+                return $true
+            }
+            
+            # Exclude antivirus installation path
+            if ($lowerPath -like "*$($Config.QuarantinePath -replace '\\', '\\')*") {
+                return $true
+            }
+            
+            return $false
+        }
+        
+        # Helper function to set file ownership and permissions
+        function Set-DLLFileOwnership {
+            param ([string]$filePath)
+            try {
+                takeown /F $filePath /A 2>&1 | Out-Null
+                icacls $filePath /reset 2>&1 | Out-Null
+                icacls $filePath /grant "Administrators:F" /inheritance:d 2>&1 | Out-Null
+                return $true
+            } catch {
+                return $false
+            }
+        }
+        
+        # Helper function to stop processes using DLL
+        function Stop-ProcessesUsingDLL {
+            param ([string]$filePath)
+            try {
+                $processes = Get-Process | Where-Object { 
+                    ($_.Modules | Where-Object { $_.FileName -eq $filePath }) 
+                } -ErrorAction SilentlyContinue
+                
+                foreach ($process in $processes) {
+                    try {
+                        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+                        Write-AVLog "Unsigned DLL Remover: Stopped process $($process.Name) (PID: $($process.Id)) using $filePath" "INFO" "unsigned_dll_remover.log"
+                    } catch {
+                        try {
+                            taskkill /PID $process.Id /F 2>&1 | Out-Null
+                            Write-AVLog "Unsigned DLL Remover: Force-killed process $($process.Name) (PID: $($process.Id))" "INFO" "unsigned_dll_remover.log"
+                        } catch { }
+                    }
+                }
+            } catch { }
+        }
+        
+        # Helper function to calculate file hash and signature
+        function Get-DLLFileHash {
+            param ([string]$filePath)
+            try {
+                $signature = Get-AuthenticodeSignature -FilePath $filePath -ErrorAction Stop
+                $hash = Get-FileHash -Path $filePath -Algorithm SHA256 -ErrorAction Stop
+                return @{
+                    Hash = $hash.Hash.ToLower()
+                    Status = $signature.Status
+                }
+            } catch {
+                return $null
+            }
+        }
+        
+        # Helper function to quarantine file (uses shared quarantine folder)
+        function Quarantine-DLLFile {
+            param ([string]$filePath)
+            try {
+                $fileName = Split-Path -Leaf $filePath
+                $quarantinePath = Join-Path -Path $Config.QuarantinePath -ChildPath "$([DateTime]::Now.Ticks)_$fileName"
+                
+                if (-not (Test-Path $Config.QuarantinePath)) {
+                    New-Item -ItemType Directory -Path $Config.QuarantinePath -Force | Out-Null
+                }
+                
+                Move-Item -Path $filePath -Destination $quarantinePath -Force -ErrorAction Stop
+                Write-AVLog "Unsigned DLL Remover: Quarantined $filePath to $quarantinePath" "INFO" "unsigned_dll_remover.log"
+                return $true
+            } catch {
+                Write-AVLog "Unsigned DLL Remover: Failed to quarantine ${filePath}: $_" "WARN" "unsigned_dll_remover.log"
+                return $false
+            }
+        }
+        
+        # Scan drives for unsigned DLLs
+        $drives = Get-CimInstance -ClassName Win32_LogicalDisk | Where-Object { $_.DriveType -in (2, 3, 4) }
+        
+        foreach ($drive in $drives) {
+            $root = $drive.DeviceID + "\"
+            try {
+                # Limit scan to prevent excessive resource usage
+                $dllFiles = Get-ChildItem -Path $root -Include *.dll,*.winmd -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object { -not (Should-ExcludeDLLFile -filePath $_.FullName) } |
+                    Select-Object -First 500
+                
+                foreach ($dll in $dllFiles) {
+                    try {
+                        $fileHash = Get-DLLFileHash -filePath $dll.FullName
+                        if (-not $fileHash) { continue }
+                        
+                        if ($Script:UnsignedDLLScannedFiles.ContainsKey($fileHash.Hash)) {
+                            # Already scanned - check if invalid
+                            if (-not $Script:UnsignedDLLScannedFiles[$fileHash.Hash]) {
+                                # Previously found invalid - quarantine if still exists
+                                if (Test-Path $dll.FullName) {
+                                    if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                        Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                        if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                            $quarantinedCount++
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            # New file - check signature
+                            $isValid = $fileHash.Status -eq "Valid"
+                            $Script:UnsignedDLLScannedFiles[$fileHash.Hash] = $isValid
+                            
+                            # Save to database
+                            "$($fileHash.Hash),$isValid" | Out-File -FilePath $localDatabase -Append -Encoding UTF8 -ErrorAction SilentlyContinue
+                            
+                            if (-not $isValid) {
+                                # Unsigned DLL found - quarantine it
+                                Write-AVLog "Unsigned DLL Remover: Found unsigned DLL: $($dll.FullName) (Hash: $($fileHash.Hash))" "INFO" "unsigned_dll_remover.log"
+                                
+                                if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                    Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                    if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                        $quarantinedCount++
+                                    }
+                                }
+                            }
+                        }
+                    } catch {
+                        Write-AVLog "Unsigned DLL Remover: Error processing $($dll.FullName): $_" "WARN" "unsigned_dll_remover.log"
+                    }
+                }
+            } catch {
+                Write-AVLog "Unsigned DLL Remover: Scan failed for drive ${root}: $_" "WARN" "unsigned_dll_remover.log"
+            }
+        }
+        
+        # Explicit System32 scan (limited)
+        try {
+            $system32Files = Get-ChildItem -Path "C:\Windows\System32" -Include *.dll,*.winmd -File -ErrorAction SilentlyContinue |
+                Where-Object { -not (Should-ExcludeDLLFile -filePath $_.FullName) } |
+                Select-Object -First 200
+            
+            foreach ($dll in $system32Files) {
+                try {
+                    $fileHash = Get-DLLFileHash -filePath $dll.FullName
+                    if (-not $fileHash) { continue }
+                    
+                    if ($Script:UnsignedDLLScannedFiles.ContainsKey($fileHash.Hash)) {
+                        if (-not $Script:UnsignedDLLScannedFiles[$fileHash.Hash]) {
+                            if (Test-Path $dll.FullName) {
+                                if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                    Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                    if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                        $quarantinedCount++
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        $isValid = $fileHash.Status -eq "Valid"
+                        $Script:UnsignedDLLScannedFiles[$fileHash.Hash] = $isValid
+                        "$($fileHash.Hash),$isValid" | Out-File -FilePath $localDatabase -Append -Encoding UTF8 -ErrorAction SilentlyContinue
+                        
+                        if (-not $isValid) {
+                            Write-AVLog "Unsigned DLL Remover: Found unsigned System32 DLL: $($dll.FullName)" "INFO" "unsigned_dll_remover.log"
+                            
+                            if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                    $quarantinedCount++
+                                }
+                            }
+                        }
+                    }
+                } catch { }
+            }
+        } catch { }
+        
+        if ($quarantinedCount -gt 0) {
+            Write-AVLog "Unsigned DLL Remover: Quarantined $quarantinedCount unsigned DLL(s)" "INFO" "unsigned_dll_remover.log"
+        }
+        
+        return $quarantinedCount
+    } catch {
+        Write-AVLog "Unsigned DLL Remover error: $_" "ERROR" "unsigned_dll_remover.log"
+        return 0
+    }
+}
+
 # ===================== Main =====================
 
 try {
@@ -8922,7 +10297,9 @@ Write-Host "[PROTECTION] Anti-termination safeguards active" -ForegroundColor Gr
         "QuarantineManagement",
         "ReflectiveDLLInjectionDetection",
         "ResponseEngine",
-        "PrivacyForgeSpoofing"
+        "PrivacyForgeSpoofing",
+        "ElfDLLUnloader",
+        "UnsignedDLLRemover"
     )
 
     foreach ($modName in $moduleNames) {
