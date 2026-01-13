@@ -1,10 +1,9 @@
 param([switch]$Uninstall)
 
 #Requires -Version 5.1
-#Requires -RunAsAdministrator
 
 # ============================================================================
-# Modular Antivirus & EDR - Single File Build
+# Antivirus & EDR
 # Author: Gorstak
 # ============================================================================
 
@@ -95,6 +94,49 @@ $Config = @{
     AutoKillThreats = $true
     AutoQuarantine = $true
     MaxMemoryUsageMB = 500
+}
+
+# <CHANGE> Add graceful elevation check function (insert after $Config block, ~line 99)
+function Test-IsAdmin {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]$identity
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Request-Elevation {
+    param([string]$Reason = "This operation requires administrator privileges.")
+    
+    # <CHANGE> Use a global mutex - if elevated instance owns it, children skip
+    $mutexName = "Global\AntivirusProtection_Elevated"
+    
+    if (Test-IsAdmin) {
+        # Try to own the mutex (elevated parent holds it)
+        $script:ElevationMutex = New-Object System.Threading.Mutex($false, $mutexName)
+        try {
+            $script:ElevationMutex.WaitOne(0) | Out-Null
+        } catch {}
+        return
+    }
+    
+    # <CHANGE> Check if mutex exists (means elevated instance is running)
+    $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+    $hasHandle = $false
+    try {
+        $hasHandle = $mutex.WaitOne(0, $false)
+    } catch {}
+    
+    if (-not $hasHandle) {
+        # Mutex held by elevated parent - we're a child, skip elevation
+        return
+    }
+    
+    # Release it - we're the first non-elevated instance, need to elevate
+    $mutex.ReleaseMutex()
+    $mutex.Dispose()
+    
+    Write-Warning $Reason
+    Start-Process powershell.exe -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`"" -Verb RunAs
+    exit
 }
 
 $Global:AntivirusState = @{
@@ -255,52 +297,28 @@ function Install-Persistence {
     # Define paths for cleanup
     $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     $shortcutPath = Join-Path $startupFolder "AntivirusProtection.lnk"
+    $runKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+    $runKeyName = "AntivirusProtection"
 
     try {
+        # Remove old persistence methods
         Get-ScheduledTask -TaskName "AntivirusProtection" -ErrorAction SilentlyContinue |
             Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
 
-        $taskAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($Script:InstallPath)\$($Script:ScriptName)`""
-        $taskTrigger = New-ScheduledTaskTrigger -AtLogon -User $env:USERNAME
-        $taskTriggerBoot = New-ScheduledTaskTrigger -AtStartup
-        $taskPrincipal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
-        $taskSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -DontStopOnIdleEnd
-
-        Register-ScheduledTask -TaskName "AntivirusProtection" -Action $taskAction -Trigger $taskTrigger,$taskTriggerBoot -Principal $taskPrincipal -Settings $taskSettings -Force -ErrorAction Stop
-
-        # Remove startup shortcut if it exists (scheduled task is preferred method)
         if (Test-Path $shortcutPath) {
             Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
-            Write-Host "[+] Removed startup shortcut (using scheduled task instead)" -ForegroundColor Green
-            Write-StabilityLog "Removed startup shortcut - scheduled task is active"
         }
 
-        Write-Host "[+] Scheduled task created for automatic startup" -ForegroundColor Green
-        Write-StabilityLog "Persistence setup completed - scheduled task created"
+        # Add to HKCU Run key
+        $runCommand = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($Script:InstallPath)\$($Script:ScriptName)`""
+        Set-ItemProperty -Path $runKeyPath -Name $runKeyName -Value $runCommand -ErrorAction Stop
+
+        Write-Host "[+] Registry Run key entry created for automatic startup" -ForegroundColor Green
+        Write-StabilityLog "Persistence setup completed - HKCU Run key created"
     }
     catch {
-        Write-Host "[!] Failed to create scheduled task: $_" -ForegroundColor Red
+        Write-Host "[!] Failed to create registry Run key entry: $_" -ForegroundColor Red
         Write-StabilityLog "Persistence setup failed: $_" "ERROR"
-
-        try {
-            # Ensure scheduled task is removed before creating shortcut
-            Get-ScheduledTask -TaskName "AntivirusProtection" -ErrorAction SilentlyContinue |
-                Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
-
-            $shell = New-Object -ComObject WScript.Shell
-            $shortcut = $shell.CreateShortcut($shortcutPath)
-            $shortcut.TargetPath = "powershell.exe"
-            $shortcut.Arguments = "-ExecutionPolicy Bypass -File `"$($Script:InstallPath)\$($Script:ScriptName)`""
-            $shortcut.WorkingDirectory = $Script:InstallPath
-            $shortcut.Save()
-
-            Write-Host "[+] Fallback: Created startup shortcut" -ForegroundColor Yellow
-            Write-StabilityLog "Fallback persistence: startup shortcut created"
-        }
-        catch {
-            Write-Host "[!] Both scheduled task and shortcut failed: $_" -ForegroundColor Red
-            Write-StabilityLog "All persistence methods failed: $_" "ERROR"
-        }
     }
 }
 
@@ -378,9 +396,25 @@ function Uninstall-Antivirus {
     }
 
     try {
+        # Remove registry Run key entry
+        $runKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        $runKeyName = "AntivirusProtection"
+        if (Get-ItemProperty -Path $runKeyPath -Name $runKeyName -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $runKeyPath -Name $runKeyName -Force -ErrorAction SilentlyContinue
+            Write-Host "[+] Removed registry Run key entry" -ForegroundColor Green
+            Write-StabilityLog "Removed registry Run key entry during uninstall"
+        }
+    }
+    catch {
+        Write-Host "[!] Failed to remove registry Run key entry: $_" -ForegroundColor Yellow
+        Write-StabilityLog "Failed to remove registry Run key entry: $_" "WARN"
+    }
+
+    # Clean up old persistence methods if they exist
+    try {
         Get-ScheduledTask -TaskName "AntivirusProtection" -ErrorAction SilentlyContinue |
             Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
-        Write-Host "[+] Removed scheduled task" -ForegroundColor Green
+        Write-Host "[+] Removed scheduled task (if existed)" -ForegroundColor Green
         Write-StabilityLog "Removed scheduled task during uninstall"
     }
     catch {
@@ -392,7 +426,7 @@ function Uninstall-Antivirus {
         $shortcutPath = Join-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup" "AntivirusProtection.lnk"
         if (Test-Path $shortcutPath) {
             Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
-            Write-Host "[+] Removed startup shortcut" -ForegroundColor Green
+            Write-Host "[+] Removed startup shortcut (if existed)" -ForegroundColor Green
             Write-StabilityLog "Removed startup shortcut during uninstall"
         }
     }
@@ -10210,8 +10244,13 @@ try {
 
     Write-StabilityLog "Executing script path: $PSCommandPath" "INFO"
 
+    # <CHANGE> Clean up elevation flag on exit
+$flagFile = "$env:ProgramData\AntivirusProtection\.elevated"
+Register-EngineEvent PowerShell.Exiting -Action { Remove-Item $flagFile -Force -ErrorAction SilentlyContinue } | Out-Null
     Register-ExitCleanup
-
+    
+    Request-Elevation -Reason "Antivirus protection requires administrator privileges for full functionality."
+    
     Install-Antivirus
     
     # Only initialize mutex if not already initialized during installation
