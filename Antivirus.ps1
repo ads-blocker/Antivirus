@@ -1,36 +1,100 @@
-# Simple Antivirus
+param([switch]$Uninstall)
+
+#Requires -Version 5.1
+
+# ============================================================================
+# Antivirus & EDR
 # Author: Gorstak
+# ============================================================================
 
 # Unique script identifier (GUID) - used for process identification and mutex naming
-$Script:ScriptGUID = "539EF6B5-578B-46F3-A5C7-FD564CB9C8FB"
+$Script:ScriptGUID = "539EF6B5-578B-4AF3-A5C7-FD564CB9C8FB"
 
-# Define paths and parameters
-$taskName = "SimpleAntivirusStartup"
-$taskDescription = "Runs the Simple Antivirus script at user logon with admin privileges."
-$quarantineFolder = "C:\Quarantine"
-$logFile = "$quarantineFolder\antivirus_log.txt"
-$localDatabase = "$quarantineFolder\scanned_files.txt"
-$scannedFiles = @{}
+$Script:InstallPath = "C:\ProgramData\AntivirusProtection"
+$Script:ScriptName = Split-Path -Leaf $PSCommandPath
+$Script:MaxRestartAttempts = 3
+$Script:StabilityLogPath = "$Script:InstallPath\Logs\stability_log.txt"
+
+$Script:ManagedJobConfig = @{
+    HashDetectionIntervalSeconds = 15
+    LOLBinDetectionIntervalSeconds = 15
+    ProcessAnomalyDetectionIntervalSeconds = 15
+    AMSIBypassDetectionIntervalSeconds = 15
+    CredentialDumpDetectionIntervalSeconds = 15
+    WMIPersistenceDetectionIntervalSeconds = 120
+    ScheduledTaskDetectionIntervalSeconds = 120
+    RegistryPersistenceDetectionIntervalSeconds = 120
+    DLLHijackingDetectionIntervalSeconds = 90
+    TokenManipulationDetectionIntervalSeconds = 60
+    ProcessHollowingDetectionIntervalSeconds = 30
+    KeyloggerDetectionIntervalSeconds = 45
+    KeyScramblerManagementIntervalSeconds = 60
+    RansomwareDetectionIntervalSeconds = 15
+    NetworkAnomalyDetectionIntervalSeconds = 30
+    NetworkTrafficMonitoringIntervalSeconds = 45
+    RootkitDetectionIntervalSeconds = 180
+    ClipboardMonitoringIntervalSeconds = 30
+    COMMonitoringIntervalSeconds = 120
+    BrowserExtensionMonitoringIntervalSeconds = 300
+    ShadowCopyMonitoringIntervalSeconds = 30
+    USBMonitoringIntervalSeconds = 20
+    MobileDeviceMonitoringIntervalSeconds = 15
+    AttackToolsDetectionIntervalSeconds = 30
+    AdvancedThreatDetectionIntervalSeconds = 20
+    EventLogMonitoringIntervalSeconds = 60
+    FirewallRuleMonitoringIntervalSeconds = 120
+    ServiceMonitoringIntervalSeconds = 60
+    FilelessDetectionIntervalSeconds = 20
+    MemoryScanningIntervalSeconds = 90
+    NamedPipeMonitoringIntervalSeconds = 45
+    DNSExfiltrationDetectionIntervalSeconds = 30
+    PasswordManagementIntervalSeconds = 120
+    WebcamGuardianIntervalSeconds = 5
+    BeaconDetectionIntervalSeconds = 60
+    CodeInjectionDetectionIntervalSeconds = 30
+    DataExfiltrationDetectionIntervalSeconds = 30
+    ElfCatcherIntervalSeconds = 30
+    FileEntropyDetectionIntervalSeconds = 120
+    HoneypotMonitoringIntervalSeconds = 30
+    LateralMovementDetectionIntervalSeconds = 30
+    ProcessCreationDetectionIntervalSeconds = 10
+    QuarantineManagementIntervalSeconds = 300
+    ReflectiveDLLInjectionDetectionIntervalSeconds = 30
+    ResponseEngineIntervalSeconds = 10
+    PrivacyForgeSpoofingIntervalSeconds = 60
+    ElfDLLUnloaderIntervalSeconds = 10
+    UnsignedDLLRemoverIntervalSeconds = 300
+}
 
 $Config = @{
-    QuarantinePath = $quarantineFolder
-    LogPath = $logFile
+    EDRName = "MalwareDetector"
+    LogPath = "$Script:InstallPath\Logs"
+    QuarantinePath = "$Script:InstallPath\Quarantine"
+    DatabasePath = "$Script:InstallPath\Data"
+    WhitelistPath = "$Script:InstallPath\Data\whitelist.json"
+    ReportsPath = "$Script:InstallPath\Reports"
+    HMACKeyPath = "$Script:InstallPath\Data\db_integrity.hmac"
+    PIDFilePath = "$Script:InstallPath\Data\antivirus.pid"
+    MutexName = "Local\AntivirusProtection_Mutex_{0}_{1}_{2}" -f $env:COMPUTERNAME, $env:USERNAME, $Script:ScriptGUID
+
     CirclHashLookupUrl = "https://hashlookup.circl.lu/lookup/sha256"
-    CymruApiUrl = "https://hash.cymru.com/v2"
+    CymruApiUrl = "https://api.malwarehash.cymru.com/v1/hash"
     MalwareBazaarApiUrl = "https://mb-api.abuse.ch/api/v1/"
+
+    ExclusionPaths = @(
+        $Script:InstallPath,
+        "$Script:InstallPath\Logs",
+        "$Script:InstallPath\Quarantine",
+        "$Script:InstallPath\Reports",
+        "$Script:InstallPath\Data"
+    )
+    ExclusionProcesses = @("powershell", "pwsh")
+
+    EnableUnsignedDLLScanner = $true
+    AutoKillThreats = $true
     AutoQuarantine = $true
+    MaxMemoryUsageMB = 500
 }
-
-$Script:JobIntervals = @{
-    HashDetection = 300          # 5 minutes
-    ProcessAnomaly = 60          # 1 minute
-    KeyloggerDetection = 120     # 2 minutes
-    RansomwareDetection = 60     # 1 minute
-    NetworkAnomaly = 180         # 3 minutes
-    LOLBinDetection = 300        # 5 minutes
-}
-
-$Script:LastJobRun = @{}
 
 # <CHANGE> Add graceful elevation check function (insert after $Config block, ~line 99)
 function Test-IsAdmin {
@@ -75,321 +139,1010 @@ function Request-Elevation {
     exit
 }
 
-function Install-Antivirus {
-    # Copy script to quarantine folder
-    $targetPath = "$quarantineFolder\Antivirus.ps1"
-    if ($PSCommandPath -ne $targetPath) {
-        Copy-Item -Path $PSCommandPath -Destination $targetPath -Force -ErrorAction SilentlyContinue
-        Write-Log "Installed script to $targetPath"
-    }
-    
-    # Add to HKCU Run key for current user startup
-    $runKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
-    $runKeyName = "SimpleAntivirus"
-    $runCommand = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$targetPath`""
-    
-    try {
-        Set-ItemProperty -Path $runKeyPath -Name $runKeyName -Value $runCommand -ErrorAction Stop
-        Write-Log "Added to startup: $runKeyName"
-    } catch {
-        Write-Log "Failed to add to startup: $($_.Exception.Message)"
-    }
+$Global:AntivirusState = @{
+    Running = $false
+    Installed = $false
+    Jobs = @{}
+    Mutex = $null
+    ThreatCount = 0
+    FilesScanned = 0
+    FilesQuarantined = 0
+    ProcessesTerminated = 0
 }
 
-# Logging Function with Rotation
-function Write-Log {
-    param ([string]$message)
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $logEntry = "[$timestamp] $message"
-    Write-Host "Logging: $logEntry"
-    if (-not (Test-Path $quarantineFolder)) {
-        New-Item -Path $quarantineFolder -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        Write-Host "Created folder: $quarantineFolder"
-    }
-    if ((Test-Path $logFile) -and ((Get-Item $logFile -ErrorAction SilentlyContinue).Length -ge 10MB)) {
-        $archiveName = "$quarantineFolder\antivirus_log_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
-        Rename-Item -Path $logFile -NewName $archiveName -ErrorAction Stop
-        Write-Host "Rotated log to: $archiveName"
-    }
-    $logEntry | Out-File -FilePath $logFile -Append -Encoding UTF8 -ErrorAction Stop
-}
+$Script:LoopCounter = 0
+$script:ManagedJobs = @{}
+
+# Termination protection variables
+$Script:TerminationAttempts = 0
+$Script:MaxTerminationAttempts = 5
+$Script:AutoRestart = $true
+$Script:SelfPID = $PID
 
 function Write-AVLog {
-    param (
-        [string]$Message,
-        [string]$Level = "INFO"
-    )
-    Write-Log "[$Level] $Message"
-}
+    param([string]$Message, [string]$Level = "INFO", [string]$LogFile = "antivirus_log.txt")
 
-# Take Ownership and Modify Permissions (Aggressive)
-function Set-FileOwnershipAndPermissions {
-    param ([string]$filePath)
-    try {
-        takeown /F $filePath /A | Out-Null
-        icacls $filePath /reset | Out-Null
-        icacls $filePath /grant "Administrators:F" /inheritance:d | Out-Null
-        Write-Log "Forcibly set ownership and permissions for $filePath"
-        return $true
-    } catch {
-        Write-Log "Failed to set ownership/permissions for ${filePath}: $($_.Exception.Message)"
-        return $false
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $entry = "[$ts] [$Level] $Message"
+    
+    # Try to get Config from global scope first, then script scope, then local scope
+    $configVar = $null
+    if ($null -ne (Get-Variable -Name "Config" -Scope Global -ErrorAction SilentlyContinue)) {
+        $configVar = $global:Config
+    } elseif ($null -ne (Get-Variable -Name "Config" -Scope Script -ErrorAction SilentlyContinue)) {
+        $configVar = $script:Config
+    } elseif (Test-Path Variable:Config) {
+        $configVar = $Config
     }
-}
-
-# Calculate File Hash and Signature
-function Calculate-FileHash {
-    param ([string]$filePath)
-    try {
-        $signature = Get-AuthenticodeSignature -FilePath $filePath -ErrorAction Stop
-        $hash = Get-FileHash -Path $filePath -Algorithm SHA256 -ErrorAction Stop
-        Write-Log "Signature status for ${filePath}: $($signature.Status) - $($signature.StatusMessage)"
-        return [PSCustomObject]@{
-            Hash = $hash.Hash.ToLower()
-            Status = $signature.Status
-            StatusMessage = $signature.StatusMessage
+    
+    # Check if Config exists and LogPath is not null
+    if ($null -eq $configVar -or $null -eq $configVar.LogPath -or [string]::IsNullOrWhiteSpace($configVar.LogPath)) {
+        # Fallback to default log path if Config is not available
+        $logPath = if ($Script:InstallPath) { "$Script:InstallPath\Logs" } else { "C:\ProgramData\AntivirusProtection\Logs" }
+        $logFilePath = Join-Path $logPath $LogFile
+        
+        if (!(Test-Path $logPath)) {
+            New-Item -ItemType Directory -Path $logPath -Force | Out-Null
         }
-    } catch {
-        Write-Log "Error processing ${filePath}: $($_.Exception.Message)"
-        return $null
-    }
-}
-
-# Quarantine File
-function Quarantine-File {
-    param ([string]$filePath)
-    try {
-        $quarantinePath = Join-Path -Path $quarantineFolder -ChildPath (Split-Path $filePath -Leaf)
-        Move-Item -Path $filePath -Destination $quarantinePath -Force -ErrorAction Stop
-        Write-Log "Quarantined file: $filePath to $quarantinePath"
-    } catch {
-        Write-Log "Failed to quarantine ${filePath}: $($_.Exception.Message)"
-    }
-}
-
-# Stop Processes Using DLL
-function Stop-ProcessUsingDLL {
-    param ([string]$filePath)
-    try {
-        $processes = Get-Process | Where-Object { ($_.Modules | Where-Object { $_.FileName -eq $filePath }) }
-        foreach ($process in $processes) {
-            Stop-Process -Id $process.Id -Force -ErrorAction Stop
-            Write-Log "Stopped process $($process.Name) (PID: $($process.Id)) using $filePath"
+    } else {
+        $logFilePath = Join-Path $configVar.LogPath $LogFile
+        
+        if (!(Test-Path $configVar.LogPath)) {
+            New-Item -ItemType Directory -Path $configVar.LogPath -Force | Out-Null
         }
-    } catch {
-        Write-Log "Error stopping processes for ${filePath}: $($_.Exception.Message)"
+    }
+
+    Add-Content -Path $logFilePath -Value $entry -ErrorAction SilentlyContinue
+
+    $eid = switch ($Level) {
+        "ERROR" { 1001 }
+        "WARN" { 1002 }
+        "THREAT" { 1003 }
+        default { 1000 }
+    }
+
+    # Only write to event log if Config and EDRName are available
+    if ($null -ne $configVar -and $null -ne $configVar.EDRName -and -not [string]::IsNullOrWhiteSpace($configVar.EDRName)) {
+        # Ensure event log source exists before writing
         try {
-            $processes = Get-Process | Where-Object { ($_.Modules | Where-Object { $_.FileName -eq $filePath }) }
-            foreach ($process in $processes) {
-                taskkill /PID $process.Id /F | Out-Null
-                Write-Log "Force-killed process $($process.Name) (PID: $($process.Id)) using taskkill"
+            if (-not [System.Diagnostics.EventLog]::SourceExists($configVar.EDRName)) {
+                [System.Diagnostics.EventLog]::CreateEventSource($configVar.EDRName, "Application")
             }
         } catch {
-            Write-Log "Fallback process kill failed for ${filePath}: $($_.Exception.Message)"
+            # Event log source creation may require elevation or fail for other reasons
+            # Silently continue - we'll just skip event log writing
+            return
         }
-    }
-}
-
-function Is-SuspiciousElfFile {
-    param ([string]$filePath)
-    $fileName = [System.IO.Path]::GetFileName($filePath).ToLower()
-    return $fileName -like '*_elf.dll'
-}
-
-function Should-ExcludeFile {
-    param ([string]$filePath)
-    $lowerPath = $filePath.ToLower()
-    
-    if ($lowerPath -like "*\assembly\*") {
-        Write-Log "Excluding assembly folder file: $filePath"
-        return $true
-    }
-    
-    if ($lowerPath -like "*ctfmon*" -or $lowerPath -like "*msctf.dll" -or $lowerPath -like "*msutb.dll") {
-        Write-Log "Excluding ctfmon-related file: $filePath"
-        return $true
-    }
-    
-    return $false
-}
-
-# Remove Unsigned DLLs
-function Remove-UnsignedDLLs {
-    Write-Log "Starting unsigned DLL/WINMD scan."
-    $drives = Get-CimInstance -ClassName Win32_LogicalDisk | Where-Object { $_.DriveType -in (2, 3, 4) }
-    foreach ($drive in $drives) {
-        $root = $drive.DeviceID + "\"
-        Write-Log "Scanning drive: $root"
+        
         try {
-            $dllFiles = Get-ChildItem -Path $root -Include *.dll,*.winmd -Recurse -File -Exclude @($quarantineFolder, "C:\Windows\System32\config") -ErrorAction Stop
-            foreach ($dll in $dllFiles) {
-                try {
-                    if (Should-ExcludeFile -filePath $dll.FullName) {
-                        continue
-                    }
-                    
-                    if (Is-SuspiciousElfFile -filePath $dll.FullName) {
-                        Write-Log "Detected ELF file (quarantine regardless of signature): $($dll.FullName)"
-                        if (Set-FileOwnershipAndPermissions -filePath $dll.FullName) {
-                            Stop-ProcessUsingDLL -filePath $dll.FullName
-                            Quarantine-File -filePath $dll.FullName
-                        }
-                        continue
-                    }
-                    
-                    $fileHash = Calculate-FileHash -filePath $dll.FullName
-                    if ($fileHash) {
-                        if ($scannedFiles.ContainsKey($fileHash.Hash)) {
-                            Write-Log "Skipping already scanned file: $($dll.FullName) (Hash: $($fileHash.Hash))"
-                            if (-not $scannedFiles[$fileHash.Hash]) {
-                                if (Set-FileOwnershipAndPermissions -filePath $dll.FullName) {
-                                    Stop-ProcessUsingDLL -filePath $dll.FullName
-                                    Quarantine-File -filePath $dll.FullName
-                                }
-                            }
-                        } else {
-                            $isValid = $fileHash.Status -eq "Valid"
-                            $scannedFiles[$fileHash.Hash] = $isValid
-                            "$($fileHash.Hash),$isValid" | Out-File -FilePath $localDatabase -Append -Encoding UTF8 -ErrorAction Stop
-                            Write-Log "Scanned new file: $($dll.FullName) (Valid: $isValid)"
-                            if (-not $isValid) {
-                                if (Set-FileOwnershipAndPermissions -filePath $dll.FullName) {
-                                    Stop-ProcessUsingDLL -filePath $dll.FullName
-                                    Quarantine-File -filePath $dll.FullName
-                                }
-                            }
-                        }
-                    }
-                } catch {
-                    Write-Log "Error processing file $($dll.FullName): $($_.Exception.Message)"
-                }
-            }
+            Write-EventLog -LogName Application -Source $configVar.EDRName -EntryType Information -EventId $eid -Message $Message -ErrorAction SilentlyContinue
         } catch {
-            Write-Log "Scan failed for drive ${root} $($_.Exception.Message)"
+            # If event log write still fails, silently continue
         }
     }
-    
-    # Explicit System32 Scan
-    Write-Log "Starting explicit System32 scan."
+}
+
+function Write-StabilityLog {
+    param([string]$Message, [string]$Level = "INFO")
+
+    $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $entry = "[$ts] [$Level] [STABILITY] $Message"
+
+    if (!(Test-Path (Split-Path $Script:StabilityLogPath -Parent))) {
+        New-Item -ItemType Directory -Path (Split-Path $Script:StabilityLogPath -Parent) -Force | Out-Null
+    }
+
+    Add-Content -Path $Script:StabilityLogPath -Value $entry -ErrorAction SilentlyContinue
+    Write-Host $entry -ForegroundColor $(switch($Level) { "ERROR" {"Red"} "WARN" {"Yellow"} default {"White"} })
+}
+
+
+function Register-ExitCleanup {
+    if ($script:ExitCleanupRegistered) {
+        return
+    }
+
     try {
-        $system32Files = Get-ChildItem -Path "C:\Windows\System32" -Include *.dll,*.winmd -File -ErrorAction Stop
-        foreach ($dll in $system32Files) {
+        Register-EngineEvent -SourceIdentifier "AntivirusProtection_ExitCleanup" -EventName PowerShell.Exiting -Action {
+            # Cleanup actions if needed
+        } | Out-Null
+        $script:ExitCleanupRegistered = $true
+    }
+    catch {
+    }
+}
+
+function Install-Antivirus {
+    $targetScript = Join-Path $Script:InstallPath $Script:ScriptName
+    $currentPath = $PSCommandPath
+
+    # Set SelfPath to the installed script location (used by auto-restart and watchdog)
+    $Script:SelfPath = $targetScript
+
+    if ($currentPath -eq $targetScript) {
+        Write-Host "[+] Running from install location" -ForegroundColor Green
+        $Global:AntivirusState.Installed = $true
+        # Initialize mutex BEFORE creating persistence to prevent race conditions during setup
+        Initialize-Mutex
+        Install-Persistence
+        return $true
+    }
+
+    Write-Host "`n=== Installing Antivirus ===`n" -ForegroundColor Cyan
+
+    @("Data","Logs","Quarantine","Reports") | ForEach-Object {
+        $p = Join-Path $Script:InstallPath $_
+        if (!(Test-Path $p)) {
+            New-Item -ItemType Directory -Path $p -Force | Out-Null
+            Write-Host "[+] Created: $p"
+        }
+    }
+
+    Copy-Item -Path $PSCommandPath -Destination $targetScript -Force
+    Write-Host "[+] Copied main script to $targetScript"
+
+    # Initialize mutex BEFORE creating persistence to prevent race conditions during setupcomplete.cmd
+    # This ensures only one instance can acquire the mutex before scheduled tasks are created
+    Initialize-Mutex
+    Install-Persistence
+
+    Write-Host "`n[+] Installation complete. Continuing in this instance...`n" -ForegroundColor Green
+    $Global:AntivirusState.Installed = $true
+    return $true
+}
+
+function Install-Persistence {
+    Write-Host "`n[*] Setting up persistence for automatic startup...`n" -ForegroundColor Cyan
+
+    # Define paths for cleanup
+    $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    $shortcutPath = Join-Path $startupFolder "AntivirusProtection.lnk"
+    $runKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+    $runKeyName = "AntivirusProtection"
+
+    try {
+        # Remove old persistence methods
+        Get-ScheduledTask -TaskName "AntivirusProtection" -ErrorAction SilentlyContinue |
+            Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
+
+        if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+        }
+
+        # Add to HKCU Run key
+        $runCommand = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$($Script:InstallPath)\$($Script:ScriptName)`""
+        Set-ItemProperty -Path $runKeyPath -Name $runKeyName -Value $runCommand -ErrorAction Stop
+
+        Write-Host "[+] Registry Run key entry created for automatic startup" -ForegroundColor Green
+        Write-StabilityLog "Persistence setup completed - HKCU Run key created"
+    }
+    catch {
+        Write-Host "[!] Failed to create registry Run key entry: $_" -ForegroundColor Red
+        Write-StabilityLog "Persistence setup failed: $_" "ERROR"
+    }
+}
+
+function Uninstall-Antivirus {
+    Write-Host "`n=== Uninstalling Antivirus ===`n" -ForegroundColor Cyan
+    Write-StabilityLog "Starting uninstall process"
+
+    # First, stop all running instances
+    try {
+        Write-Host "[*] Stopping running instances..." -ForegroundColor Yellow
+        Write-StabilityLog "Stopping running antivirus instances"
+        
+        # Check PID file for running instance
+        if (Test-Path $Config.PIDFilePath) {
             try {
-                if (Should-ExcludeFile -filePath $dll.FullName) {
-                    continue
-                }
-                
-                if (Is-SuspiciousElfFile -filePath $dll.FullName) {
-                    Write-Log "Detected ELF file in System32 (quarantine regardless of signature): $($dll.FullName)"
-                    if (Set-FileOwnershipAndPermissions -filePath $dll.FullName) {
-                        Stop-ProcessUsingDLL -filePath $dll.FullName
-                        Quarantine-File -filePath $dll.FullName
-                    }
-                    continue
-                }
-                
-                $fileHash = Calculate-FileHash -filePath $dll.FullName
-                if ($fileHash) {
-                    if ($scannedFiles.ContainsKey($fileHash.Hash)) {
-                        Write-Log "Skipping already scanned System32 file: $($dll.FullName) (Hash: $($fileHash.Hash))"
-                        if (-not $scannedFiles[$fileHash.Hash]) {
-                            if (Set-FileOwnershipAndPermissions -filePath $dll.FullName) {
-                                Stop-ProcessUsingDLL -filePath $dll.FullName
-                                Quarantine-File -filePath $dll.FullName
+                $existingPID = [int](Get-Content $Config.PIDFilePath -ErrorAction Stop)
+                if ($existingPID -ne $PID) {
+                    $existingProcess = Get-Process -Id $existingPID -ErrorAction SilentlyContinue
+                    if ($existingProcess) {
+                        # Verify it's our script before killing
+                        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $existingPID" -ErrorAction SilentlyContinue).CommandLine
+                        $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
+                        $isOurScript = $false
+                        if ($cmdLine) {
+                            if ($cmdLine -like "*$($Script:ScriptGUID)*" -or ($scriptPath -and $cmdLine -like "*$scriptPath*")) {
+                                $isOurScript = $true
                             }
                         }
-                    } else {
-                        $isValid = $fileHash.Status -eq "Valid"
-                        $scannedFiles[$fileHash.Hash] = $isValid
-                        "$($fileHash.Hash),$isValid" | Out-File -FilePath $localDatabase -Append -Encoding UTF8 -ErrorAction Stop
-                        Write-Log "Scanned new System32 file: $($dll.FullName) (Valid: $isValid)"
-                        if (-not $isValid) {
-                            if (Set-FileOwnershipAndPermissions -filePath $dll.FullName) {
-                                Stop-ProcessUsingDLL -filePath $dll.FullName
-                                Quarantine-File -filePath $dll.FullName
-                            }
+                        
+                        if ($isOurScript) {
+                            Write-Host "[+] Stopping instance (PID: $existingPID)" -ForegroundColor Green
+                            Stop-Process -Id $existingPID -Force -ErrorAction SilentlyContinue
+                            Start-Sleep -Seconds 2
                         }
                     }
                 }
             } catch {
-                Write-Log "Error processing System32 file $($dll.FullName): $($_.Exception.Message)"
+                Write-StabilityLog "Error reading PID file during uninstall: $_" "WARN"
             }
         }
+        
+        # Also check for any PowerShell processes running our script
+        $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
+        $allProcesses = Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction SilentlyContinue
+        foreach ($proc in $allProcesses) {
+            if ($proc.ProcessId -eq $PID) { continue }
+            try {
+                $cmdLine = $proc.CommandLine
+                if ($cmdLine -and ($cmdLine -like "*$($Script:ScriptGUID)*" -or ($scriptPath -and $cmdLine -like "*$scriptPath*"))) {
+                    Write-Host "[+] Stopping instance (PID: $($proc.ProcessId))" -ForegroundColor Green
+                    Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            } catch {}
+        }
+        
+        # Wait a moment for processes to terminate
+        Start-Sleep -Seconds 1
     } catch {
-        Write-Log "System32 scan failed: $($_.Exception.Message)"
+        Write-Host "[!] Warning: Could not stop all instances: $_" -ForegroundColor Yellow
+        Write-StabilityLog "Warning: Could not stop all instances during uninstall: $_" "WARN"
     }
+
+    try {
+        if ($script:ManagedJobs) {
+            foreach ($k in @($script:ManagedJobs.Keys)) {
+                try { $script:ManagedJobs.Remove($k) } catch {}
+            }
+        }
+        if ($Global:AntivirusState -and $Global:AntivirusState.Jobs) {
+            $Global:AntivirusState.Jobs.Clear()
+        }
+    }
+    catch {
+        Write-StabilityLog "Failed to clear managed jobs during uninstall: $_" "WARN"
+    }
+
+    try {
+        # Remove registry Run key entry
+        $runKeyPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        $runKeyName = "AntivirusProtection"
+        if (Get-ItemProperty -Path $runKeyPath -Name $runKeyName -ErrorAction SilentlyContinue) {
+            Remove-ItemProperty -Path $runKeyPath -Name $runKeyName -Force -ErrorAction SilentlyContinue
+            Write-Host "[+] Removed registry Run key entry" -ForegroundColor Green
+            Write-StabilityLog "Removed registry Run key entry during uninstall"
+        }
+    }
+    catch {
+        Write-Host "[!] Failed to remove registry Run key entry: $_" -ForegroundColor Yellow
+        Write-StabilityLog "Failed to remove registry Run key entry: $_" "WARN"
+    }
+
+    # Clean up old persistence methods if they exist
+    try {
+        Get-ScheduledTask -TaskName "AntivirusProtection" -ErrorAction SilentlyContinue |
+            Unregister-ScheduledTask -Confirm:$false -ErrorAction SilentlyContinue
+        Write-Host "[+] Removed scheduled task (if existed)" -ForegroundColor Green
+        Write-StabilityLog "Removed scheduled task during uninstall"
+    }
+    catch {
+        Write-Host "[!] Failed to remove scheduled task: $_" -ForegroundColor Yellow
+        Write-StabilityLog "Failed to remove scheduled task: $_" "WARN"
+    }
+
+    try {
+        $shortcutPath = Join-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup" "AntivirusProtection.lnk"
+        if (Test-Path $shortcutPath) {
+            Remove-Item $shortcutPath -Force -ErrorAction SilentlyContinue
+            Write-Host "[+] Removed startup shortcut (if existed)" -ForegroundColor Green
+            Write-StabilityLog "Removed startup shortcut during uninstall"
+        }
+    }
+    catch {
+        Write-Host "[!] Failed to remove startup shortcut: $_" -ForegroundColor Yellow
+        Write-StabilityLog "Failed to remove startup shortcut: $_" "WARN"
+    }
+
+    if (Test-Path $Script:InstallPath) {
+        Remove-Item -Path $Script:InstallPath -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "[+] Removed installation directory" -ForegroundColor Green
+        Write-StabilityLog "Removed installation directory during uninstall"
+    }
+
+    Write-Host "[+] Uninstall complete." -ForegroundColor Green
+    Write-StabilityLog "Uninstall process completed"
+    exit 0
 }
 
-# File System Watcher setup
-function Setup-FileWatchers {
-    $drives = Get-CimInstance -ClassName Win32_LogicalDisk | Where-Object { $_.DriveType -in (2, 3, 4) }
-    foreach ($drive in $drives) {
-        $monitorPath = $drive.DeviceID + "\"
-        try {
-            $fileWatcher = New-Object System.IO.FileSystemWatcher
-            $fileWatcher.Path = $monitorPath
-            $fileWatcher.Filter = "*.*"
-            $fileWatcher.IncludeSubdirectories = $true
-            $fileWatcher.EnableRaisingEvents = $true
-            $fileWatcher.NotifyFilter = [System.IO.NotifyFilters]::FileName -bor [System.IO.NotifyFilters]::LastWrite
+function Initialize-Mutex {
+    $mutexName = $Config.MutexName
 
-            $action = {
-                param($sender, $e)
-                try {
-                    if ($e.ChangeType -in "Created", "Changed" -and $e.FullPath -notlike "$quarantineFolder*" -and ($e.FullPath -like "*.dll" -or $e.FullPath -like "*.winmd")) {
-                        if (Should-ExcludeFile -filePath $e.FullPath) {
-                            return
-                        }
+    Write-StabilityLog "Initializing mutex and PID checks"
+
+    if (Test-Path $Config.PIDFilePath) {
+        try {
+            $existingPID = [int](Get-Content $Config.PIDFilePath -ErrorAction Stop)
+            
+            # Don't block if PID file contains our own PID (stale file from same instance)
+            if ($existingPID -eq $PID) {
+                Write-StabilityLog "PID file contains current PID - removing stale file" "INFO"
+                Remove-Item $Config.PIDFilePath -Force -ErrorAction SilentlyContinue
+            }
+            else {
+                $existingProcess = Get-Process -Id $existingPID -ErrorAction SilentlyContinue
+
+                if ($existingProcess) {
+                    # Check if the existing process is actually running our script
+                    try {
+                        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $existingPID" -ErrorAction SilentlyContinue).CommandLine
+                        $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
                         
-                        Write-Log "Detected file change: $($e.FullPath)"
-                        
-                        if (Is-SuspiciousElfFile -filePath $e.FullPath) {
-                            Write-Log "Detected new ELF file (quarantine regardless of signature): $($e.FullPath)"
-                            if (Set-FileOwnershipAndPermissions -filePath $e.FullPath) {
-                                Stop-ProcessUsingDLL -filePath $e.FullPath
-                                Quarantine-File -filePath $e.FullPath
+                        # Check if existing process is running our script (by GUID or path)
+                        $isOurScript = $false
+                        if ($cmdLine) {
+                            # Primary check: GUID (most reliable)
+                            if ($cmdLine -like "*$($Script:ScriptGUID)*") {
+                                $isOurScript = $true
                             }
-                            return
-                        }
-                        
-                        $fileHash = Calculate-FileHash -filePath $e.FullPath
-                        if ($fileHash) {
-                            if ($scannedFiles.ContainsKey($fileHash.Hash)) {
-                                Write-Log "Skipping already scanned file: $($e.FullPath) (Hash: $($fileHash.Hash))"
-                                if (-not $scannedFiles[$fileHash.Hash]) {
-                                    if (Set-FileOwnershipAndPermissions -filePath $e.FullPath) {
-                                        Stop-ProcessUsingDLL -filePath $e.FullPath
-                                        Quarantine-File -filePath $e.FullPath
-                                    }
-                                }
-                            } else {
-                                $isValid = $fileHash.Status -eq "Valid"
-                                $scannedFiles[$fileHash.Hash] = $isValid
-                                "$($fileHash.Hash),$isValid" | Out-File -FilePath $localDatabase -Append -Encoding UTF8 -ErrorAction Stop
-                                Write-Log "Added new file to database: $($e.FullPath) (Valid: $isValid)"
-                                if (-not $isValid) {
-                                    if (Set-FileOwnershipAndPermissions -filePath $e.FullPath) {
-                                        Stop-ProcessUsingDLL -filePath $e.FullPath
-                                        Quarantine-File -filePath $e.FullPath
-                                    }
-                                }
+                            # Secondary check: script path
+                            elseif ($scriptPath -and $cmdLine -like "*$scriptPath*") {
+                                $isOurScript = $true
                             }
                         }
-                        Start-Sleep -Milliseconds 500
+                        
+                        if ($isOurScript) {
+                            Write-StabilityLog "Blocked duplicate instance - existing PID: $existingPID" "WARN"
+                            Write-Host "[!] Another instance is already running (PID: $existingPID)" -ForegroundColor Yellow
+                            Write-AVLog "Blocked duplicate instance - existing PID: $existingPID" "WARN"
+                            throw "Another instance is already running (PID: $existingPID)"
+                        }
+                        else {
+                            # Existing process is not our script - remove stale PID file
+                            Write-StabilityLog "PID file contains different process (not our script) - removing stale file" "INFO"
+                            Remove-Item $Config.PIDFilePath -Force -ErrorAction SilentlyContinue
+                        }
                     }
-                } catch {
-                    Write-Log "Watcher error for $($e.FullPath): $($_.Exception.Message)"
+                    catch {
+                        if ($_.Exception.Message -like "*already running*") {
+                            throw
+                        }
+                        # Can't determine if it's our script, but process exists - assume it's not our script and remove stale PID
+                        Write-StabilityLog "Could not verify existing process - removing potentially stale PID file" "INFO"
+                        Remove-Item $Config.PIDFilePath -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                else {
+                    Remove-Item $Config.PIDFilePath -Force -ErrorAction SilentlyContinue
+                    Write-StabilityLog "Removed stale PID file (process $existingPID not running)"
+                    Write-AVLog "Removed stale PID file (process $existingPID not running)"
                 }
             }
+        }
+        catch {
+            if ($_.Exception.Message -like "*already running*") {
+                throw
+            }
+            Remove-Item $Config.PIDFilePath -Force -ErrorAction SilentlyContinue
+            Write-StabilityLog "Removed invalid PID file"
+        }
+    }
 
-            Register-ObjectEvent -InputObject $fileWatcher -EventName Created -Action $action -ErrorAction Stop
-            Register-ObjectEvent -InputObject $fileWatcher -EventName Changed -Action $action -ErrorAction Stop
-            Write-Log "FileSystemWatcher set up for $monitorPath"
-        } catch {
-            Write-Log "Failed to set up watcher for ${monitorPath} $($_.Exception.Message)"
+    try {
+        $Global:AntivirusState.Mutex = New-Object System.Threading.Mutex($false, $mutexName)
+        $acquired = $Global:AntivirusState.Mutex.WaitOne(3000)
+
+        if (!$acquired) {
+            # Mutex is locked - check if there's actually a running instance
+            Write-StabilityLog "Mutex locked - checking for running instances" "WARN"
+            
+            # Check for running instances, excluding our own PID
+            $scriptPath = if ($PSCommandPath) { $PSCommandPath } else { $Script:SelfPath }
+            $installedScriptPath = Join-Path $Script:InstallPath $Script:ScriptName
+            
+            $verifiedInstances = @()
+            $allPowerShellProcesses = Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID }
+            
+            foreach ($proc in $allPowerShellProcesses) {
+                try {
+                    # Verify process is actually responsive (not hung/dead)
+                    $procInfo = Get-Process -Id $proc.Id -ErrorAction Stop
+                    if (-not $procInfo.Responding) {
+                        Write-StabilityLog "Process $($proc.Id) is not responding - treating as dead" "WARN"
+                        continue
+                    }
+                    
+                    $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $($proc.Id)" -ErrorAction SilentlyContinue).CommandLine
+                    if (-not $cmdLine) {
+                        continue
+                    }
+                    
+                    # Strict verification: Primary check is GUID (most reliable), then script path
+                    $isOurScript = $false
+                    $matchedPath = $null
+                    $matchedBy = $null
+                    
+                    # PRIMARY: Check for GUID in command line (most reliable identifier)
+                    if ($cmdLine -like "*$($Script:ScriptGUID)*") {
+                        $isOurScript = $true
+                        $matchedBy = "GUID"
+                        # Also try to extract the script path for logging
+                        if ($cmdLine -match '-File\s+([^\s]+)') {
+                            $matchedPath = $matches[1].Trim('"').Trim("'")
+                        } else {
+                            $matchedPath = "GUID_Match"
+                        }
+                    }
+                    # SECONDARY: Check current script path
+                    elseif ($scriptPath -and $cmdLine -like "*$scriptPath*") {
+                        $isOurScript = $true
+                        $matchedPath = $scriptPath
+                        $matchedBy = "Path"
+                    }
+                    # TERTIARY: Check installed script path (if different from current)
+                    elseif ($installedScriptPath -and (Test-Path $installedScriptPath) -and $cmdLine -like "*$installedScriptPath*") {
+                        $isOurScript = $true
+                        $matchedPath = $installedScriptPath
+                        $matchedBy = "Path"
+                    }
+                    
+                    if ($isOurScript) {
+                        Write-StabilityLog "Verified process $($proc.Id) is running our script (matched by $matchedBy): $matchedPath" "INFO"
+                        $verifiedInstances += @{
+                            Id = $proc.Id
+                            CommandLine = $cmdLine
+                            Path = $matchedPath
+                            MatchedBy = $matchedBy
+                        }
+                    }
+                } catch {
+                    # Process doesn't exist or error checking - don't count it
+                    Write-StabilityLog "Error checking process $($proc.Id): $_" "WARN"
+                    continue
+                }
+            }
+            
+            if ($verifiedInstances.Count -gt 0) {
+                $instancePIDs = $verifiedInstances | ForEach-Object { $_.Id }
+                $instanceDetails = $verifiedInstances | ForEach-Object { "PID $($_.Id): $($_.Path)" }
+                Write-StabilityLog "Blocked duplicate instance - found $($verifiedInstances.Count) verified running instance(s) (PIDs: $($instancePIDs -join ', '))" "WARN"
+                Write-Host "[!] Another instance is already running (PIDs: $($instancePIDs -join ', '))" -ForegroundColor Yellow
+                Write-Host "[!] Running from: $($instanceDetails -join '; ')" -ForegroundColor Yellow
+                Write-AVLog "Blocked duplicate instance - found running processes: $($instancePIDs -join ', ')" "WARN"
+                $Global:AntivirusState.Mutex.Dispose()
+                throw "Another instance is already running (mutex locked)"
+            } else {
+                # No verified instances found - treat as stale mutex
+                # Since we've verified no process is running, we can safely proceed
+                Write-StabilityLog "Stale mutex detected (no running process found) - proceeding anyway" "WARN"
+                Write-Host "[!] Stale mutex detected but no process running - proceeding (stale mutex will be cleaned up)" -ForegroundColor Yellow
+                
+                # Dispose of the failed mutex reference
+                try {
+                    $Global:AntivirusState.Mutex.Dispose()
+                } catch {}
+                $Global:AntivirusState.Mutex = $null
+                
+                # Wait a bit to allow kernel cleanup
+                Start-Sleep -Milliseconds 500
+                
+                # Try to create a new mutex (Windows should have cleaned up the stale one)
+                # If it still fails, we'll proceed without mutex protection (since we verified no process is running)
+                try {
+                    $Global:AntivirusState.Mutex = New-Object System.Threading.Mutex($false, $mutexName)
+                    $acquired = $Global:AntivirusState.Mutex.WaitOne(2000)
+                    if ($acquired) {
+                        Write-StabilityLog "Successfully acquired mutex after stale detection" "INFO"
+                    } else {
+                        # Still can't acquire, but no process is running - proceed without mutex
+                        Write-StabilityLog "Mutex still locked but no process running - proceeding without mutex (stale mutex)" "WARN"
+                        Write-Host "[!] Warning: Proceeding without mutex (stale mutex detected). This is safe since no process is running." -ForegroundColor Yellow
+                        $Global:AntivirusState.Mutex.Dispose()
+                        $Global:AntivirusState.Mutex = $null
+                    }
+                } catch {
+                    # If we can't create the mutex, proceed anyway since we verified no process is running
+                    Write-StabilityLog "Could not create mutex after stale detection, but no process running - proceeding: $_" "WARN"
+                    Write-Host "[!] Warning: Proceeding without mutex protection due to stale mutex." -ForegroundColor Yellow
+                    $Global:AntivirusState.Mutex = $null
+                }
+            }
+        }
+
+        if (!(Test-Path (Split-Path $Config.PIDFilePath -Parent))) {
+            New-Item -ItemType Directory -Path (Split-Path $Config.PIDFilePath -Parent) -Force | Out-Null
+        }
+
+        $PID | Out-File -FilePath $Config.PIDFilePath -Force
+        $Global:AntivirusState.Running = $true
+        if ($Global:AntivirusState.Mutex) {
+            Write-StabilityLog "Mutex acquired, PID file written: $PID"
+        } else {
+            Write-StabilityLog "PID file written: $PID (running without mutex due to stale mutex)"
+        }
+        Write-AVLog "Antivirus started (PID: $PID)"
+        Write-Host "[+] Process ID: $PID" -ForegroundColor Green
+
+        Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
+            try {
+                Write-StabilityLog "PowerShell exiting - cleaning up mutex and PID"
+                if ($Global:AntivirusState.Mutex) {
+                    $Global:AntivirusState.Mutex.ReleaseMutex()
+                    $Global:AntivirusState.Mutex.Dispose()
+                }
+                if (Test-Path $Config.PIDFilePath) {
+                    Remove-Item $Config.PIDFilePath -Force -ErrorAction SilentlyContinue
+                }
+            }
+            catch {
+                Write-StabilityLog "Cleanup error: $_" "ERROR"
+            }
+        } | Out-Null
+
+    }
+    catch {
+        Write-StabilityLog "Mutex initialization failed: $_" "ERROR"
+        throw
+    }
+}
+
+function Select-BoundConfig {
+    param(
+        [Parameter(Mandatory=$true)][string]$FunctionName,
+        [Parameter(Mandatory=$true)][hashtable]$Config
+    )
+
+    $cmd = Get-Command $FunctionName -ErrorAction Stop
+    $paramNames = @($cmd.Parameters.Keys)
+    $bound = @{}
+    foreach ($k in $Config.Keys) {
+        if ($paramNames -contains $k) {
+            $bound[$k] = $Config[$k]
+        }
+    }
+    return $bound
+}
+
+function Register-TerminationProtection {
+    try {
+        # Monitor for unexpected termination attempts
+        $Script:UnhandledExceptionHandler = Register-ObjectEvent -InputObject ([AppDomain]::CurrentDomain) `
+            -EventName UnhandledException -Action {
+            param($src, $evtArgs)
+            
+            $errorMsg = "Unhandled exception: $($evtArgs.Exception.ToString())"
+            $errorMsg | Out-File "$using:quarantineFolder\crash_log.txt" -Append
+            
+            try {
+                # Log to security events
+                $securityEvent = @{
+                    Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
+                    EventType = "UnexpectedTermination"
+                    Severity = "Critical"
+                    Exception = $evtArgs.Exception.ToString()
+                    IsTerminating = $evtArgs.IsTerminating
+                }
+                $securityEvent | ConvertTo-Json -Compress | Out-File "$using:quarantineFolder\security_events.jsonl" -Append
+            } catch {}
+            
+            # Attempt auto-restart if configured
+            if ($using:Script:AutoRestart -and $evtArgs.IsTerminating) {
+                try {
+                    Start-Process "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -File `"$using:Script:SelfPath`"" `
+                        -WindowStyle Hidden -ErrorAction SilentlyContinue
+                } catch {}
+            }
+        }
+        
+        Write-StabilityLog "[PROTECTION] Termination protection registered"
+        
+    } catch {
+        Write-StabilityLog -Message "Failed to register termination protection" -Severity "Medium" -ErrorRecord $_
+    }
+}
+
+function Enable-CtrlCProtection {
+    try {
+        # Detect if running in ISE or console
+        if ($host.Name -eq "Windows PowerShell ISE Host") {
+            Write-Host "[PROTECTION] ISE detected - using trap-based Ctrl+C protection" -ForegroundColor Cyan
+            Write-Host "[PROTECTION] Ctrl+C protection enabled (requires $Script:MaxTerminationAttempts attempts to stop)" -ForegroundColor Green
+            return $true
+        }
+        
+        [Console]::TreatControlCAsInput = $false
+        
+        # Create scriptblock for the event handler
+        $cancelHandler = {
+            param($src, $evtArgs)
+            
+            $Script:TerminationAttempts++
+            
+            Write-Host "`n[PROTECTION] Termination attempt detected ($Script:TerminationAttempts/$Script:MaxTerminationAttempts)" -ForegroundColor Red
+            
+            try {
+                Write-SecurityEvent -EventType "TerminationAttemptBlocked" -Details @{
+                    PID = $PID
+                    AttemptNumber = $Script:TerminationAttempts
+                } -Severity "Critical"
+            } catch {}
+            
+            if ($Script:TerminationAttempts -ge $Script:MaxTerminationAttempts) {
+                Write-Host "[PROTECTION] Maximum termination attempts reached. Allowing graceful shutdown..." -ForegroundColor Yellow
+                $evtArgs.Cancel = $false
+            } else {
+                Write-Host "[PROTECTION] Termination blocked. Press Ctrl+C $($Script:MaxTerminationAttempts - $Script:TerminationAttempts) more times to force stop." -ForegroundColor Yellow
+                $evtArgs.Cancel = $true
+            }
+        }
+        
+        # Register the event handler
+        [Console]::add_CancelKeyPress($cancelHandler)
+        
+        Write-Host "[PROTECTION] Ctrl+C protection enabled (requires $Script:MaxTerminationAttempts attempts to stop)" -ForegroundColor Green
+        return $true
+    } catch {
+        Write-Host "[WARNING] Could not enable Ctrl+C protection: $($_.Exception.Message)" -ForegroundColor Yellow
+        return $false
+    }
+}
+
+function Enable-AutoRestart {
+    try {
+        $taskName = "AntivirusAutoRestart_$PID"
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" `
+            -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Script:SelfPath`""
+        
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+        
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable -RunOnlyIfNetworkAvailable:$false
+        
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+            -Settings $settings -Force -ErrorAction Stop | Out-Null
+        
+        Write-Host "[PROTECTION] Auto-restart scheduled task registered" -ForegroundColor Green
+    } catch {
+        Write-Host "[WARNING] Could not enable auto-restart: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+function Start-ProcessWatchdog {
+    try {
+        $watchdogJob = Start-Job -ScriptBlock {
+            param($parentPID, $scriptPath, $autoRestart)
+            
+            while ($true) {
+                Start-Sleep -Seconds 30
+                
+                # Check if parent process is still alive
+                $process = Get-Process -Id $parentPID -ErrorAction SilentlyContinue
+                
+                if (-not $process) {
+                    # Parent died - restart if configured
+                    if ($autoRestart) {
+                        Start-Process "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`"" `
+                            -WindowStyle Hidden -ErrorAction SilentlyContinue
+                    }
+                    break
+                }
+            }
+        } -ArgumentList $PID, $Script:SelfPath, $Script:AutoRestart
+        
+        Write-Host "[PROTECTION] Process watchdog started (Job ID: $($watchdogJob.Id))" -ForegroundColor Green
+    } catch {
+        Write-Host "[WARNING] Could not start process watchdog: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+function Register-ManagedJob {
+    param(
+        [Parameter(Mandatory=$true)][string]$Name,
+        [Parameter(Mandatory=$true)][scriptblock]$ScriptBlock,
+        [int]$IntervalSeconds = 30,
+        [bool]$Enabled = $true,
+        [bool]$Critical = $false,
+        [int]$MaxRestartAttempts = 3,
+        [int]$RestartDelaySeconds = 5,
+        [object[]]$ArgumentList = $null
+    )
+
+    if (-not $script:ManagedJobs) {
+        $script:ManagedJobs = @{}
+    }
+
+    $minIntervalSeconds = 1
+    if ($Script:ManagedJobConfig -and $Script:ManagedJobConfig.MinimumIntervalSeconds) {
+        $minIntervalSeconds = [int]$Script:ManagedJobConfig.MinimumIntervalSeconds
+    }
+
+    $IntervalSeconds = [Math]::Max([int]$IntervalSeconds, [int]$minIntervalSeconds)
+
+    $script:ManagedJobs[$Name] = [pscustomobject]@{
+        Name = $Name
+        ScriptBlock = $ScriptBlock
+        ArgumentList = $ArgumentList
+        IntervalSeconds = $IntervalSeconds
+        Enabled = $Enabled
+        Critical = $Critical
+        MaxRestartAttempts = $MaxRestartAttempts
+        RestartDelaySeconds = $RestartDelaySeconds
+        RestartAttempts = 0
+        LastStartUtc = $null
+        LastSuccessUtc = $null
+        LastError = $null
+        NextRunUtc = [DateTime]::UtcNow
+        DisabledUtc = $null
+    }
+}
+
+function Invoke-ManagedJobsTick {
+    param(
+        [Parameter(Mandatory=$true)][DateTime]$NowUtc
+    )
+
+    if (-not $script:ManagedJobs) {
+        return
+    }
+
+    foreach ($job in $script:ManagedJobs.Values) {
+        if (-not $job.Enabled) { continue }
+        if ($null -ne $job.DisabledUtc) { continue }
+        if ($job.NextRunUtc -gt $NowUtc) { continue }
+
+        $job.LastStartUtc = $NowUtc
+
+        try {
+            # Suppress all output from managed job execution to prevent pipeline binding issues
+            # Use Out-Null to ensure complete suppression of all streams including return values
+            # Redirect all streams (*>&1) to prevent any output from reaching the pipeline
+            if ($null -ne $job.ArgumentList) {
+                $null = Invoke-Command -ScriptBlock $job.ScriptBlock -ArgumentList $job.ArgumentList -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -InformationAction SilentlyContinue *>&1 | Out-Null
+            }
+            else {
+                $null = & $job.ScriptBlock -ErrorAction SilentlyContinue -WarningAction SilentlyContinue -InformationAction SilentlyContinue *>&1 | Out-Null
+            }
+            $job.LastSuccessUtc = [DateTime]::UtcNow
+            $job.RestartAttempts = 0
+            $job.LastError = $null
+            $job.NextRunUtc = $job.LastSuccessUtc.AddSeconds([Math]::Max(1, $job.IntervalSeconds))
+        }
+        catch {
+            $job.LastError = $_
+            $job.RestartAttempts++
+
+            try {
+                Write-AVLog "Managed job '$($job.Name)' failed (attempt $($job.RestartAttempts)/$($job.MaxRestartAttempts)) : $($_.Exception.Message)" "WARN"
+            }
+            catch {}
+
+            if ($job.RestartAttempts -ge $job.MaxRestartAttempts) {
+                $job.RestartAttempts = 0
+                $job.DisabledUtc = $null
+                $job.NextRunUtc = [DateTime]::UtcNow.AddMinutes(5)
+                try {
+                    Write-AVLog "Managed job '$($job.Name)' exceeded max restart attempts; backing off for 5 minutes" "ERROR"
+                }
+                catch {}
+                continue
+            }
+
+            $job.NextRunUtc = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $job.RestartDelaySeconds))
         }
     }
 }
+
+function Start-ManagedJob {
+    param(
+        [string]$ModuleName,
+        [int]$IntervalSeconds = 30
+    )
+
+    $jobName = "AV_$ModuleName"
+
+    if ($Global:AntivirusState.Jobs.ContainsKey($jobName)) {
+        return
+    }
+
+    $funcName = "Invoke-$ModuleName"
+    if (-not (Get-Command $funcName -ErrorAction SilentlyContinue)) {
+        Write-AVLog "Function not found: $funcName" "WARN"
+        return
+    }
+
+    $maxRestarts = if ($Script:ManagedJobConfig -and $Script:ManagedJobConfig.MaxRestartAttempts) { [int]$Script:ManagedJobConfig.MaxRestartAttempts } else { 3 }
+    $restartDelay = if ($Script:ManagedJobConfig -and $Script:ManagedJobConfig.RestartDelaySeconds) { [int]$Script:ManagedJobConfig.RestartDelaySeconds } else { 5 }
+
+    $sb = {
+        param(
+            [Parameter(Mandatory=$true)][string]$FunctionName,
+            [Parameter(Mandatory=$true)][hashtable]$Cfg
+        )
+
+        # Ensure global Config is available in this scope
+        if ($null -eq $global:Config -and $null -ne $Cfg) {
+            $global:Config = $Cfg
+        }
+
+        $cmd = Get-Command $FunctionName -ErrorAction Stop
+        $paramNames = @($cmd.Parameters.Keys)
+        $bound = @{}
+        
+        # Check if function expects a Config parameter (as hashtable)
+        if ($paramNames -contains "Config") {
+            $bound["Config"] = $Cfg
+        } else {
+            # Otherwise, bind individual keys from Cfg to matching parameters
+            foreach ($k in $Cfg.Keys) {
+                if ($paramNames -contains $k) {
+                    $bound[$k] = $Cfg[$k]
+                }
+            }
+        }
+        
+        # Suppress output to prevent pipeline binding issues - use Out-Null to ensure complete suppression
+        # Also suppress any implicit output by explicitly assigning to $null and redirecting all streams
+        try {
+            $null = & $FunctionName @bound *>&1 | Out-Null
+        } catch {
+            # Suppress errors too
+            $null = $_
+        }
+    }
+
+    Register-ManagedJob -Name $jobName -ScriptBlock $sb -ArgumentList @($funcName, $Config) -IntervalSeconds $IntervalSeconds -Enabled $true -Critical $false -MaxRestartAttempts $maxRestarts -RestartDelaySeconds $restartDelay
+
+    $Global:AntivirusState.Jobs[$jobName] = @{
+        Name = $jobName
+        IntervalSeconds = $IntervalSeconds
+        Module = $ModuleName
+    }
+
+    Write-AVLog "Registered managed job: $jobName (${IntervalSeconds}s interval)"
+}
+
+function Start-RecoverySequence {
+    Write-StabilityLog "Starting recovery sequence" "WARN"
+
+    try {
+
+        if ($script:ManagedJobs) {
+            foreach ($k in @($script:ManagedJobs.Keys)) {
+                try { $script:ManagedJobs.Remove($k) } catch {}
+            }
+        }
+
+        $Global:AntivirusState.Jobs.Clear()
+        Start-Sleep -Seconds 10
+        Write-StabilityLog "Recovery sequence completed"
+    }
+    catch {
+        Write-StabilityLog "Recovery sequence failed: $_" "ERROR"
+    }
+}
+
+# Note: Function name intentionally uses 'Monitor' verb for job monitoring functionality
+function Monitor-Jobs {
+    Write-Host "`n[*] Monitoring started. Press Ctrl+C to stop.`n" -ForegroundColor Cyan
+    Write-StabilityLog "Entering main monitoring loop"
+    Write-AVLog "Entering main monitoring loop"
+
+    $iteration = 0
+    $lastStabilityCheck = Get-Date
+    $consecutiveErrors = 0
+    $maxConsecutiveErrors = 10
+
+    while ($true) {
+        try {
+            while ($true) {
+                $iteration++
+                $now = Get-Date
+
+                try {
+                    Invoke-ManagedJobsTick -NowUtc ([DateTime]::UtcNow)
+                }
+                catch {
+                    $consecutiveErrors++
+                    Write-StabilityLog "Managed jobs tick failed: $_" "WARN"
+                }
+
+                if (($now - $lastStabilityCheck).TotalMinutes -ge 5) {
+                    try {
+                        $enabledCount = 0
+                        if ($script:ManagedJobs) {
+                            $enabledCount = ($script:ManagedJobs.Values | Where-Object { $_.Enabled -and ($null -eq $_.DisabledUtc) }).Count
+                        }
+                        Write-StabilityLog "Stability check: $enabledCount managed jobs enabled, iteration $iteration"
+                        $lastStabilityCheck = $now
+                        $consecutiveErrors = 0
+                    }
+                    catch {
+                        $consecutiveErrors++
+                        Write-StabilityLog "Stability check failed: $_" "WARN"
+                    }
+                }
+
+                if ($consecutiveErrors -ge $maxConsecutiveErrors) {
+                    Write-StabilityLog "Too many consecutive errors ($consecutiveErrors), triggering recovery" "ERROR"
+                    Start-RecoverySequence
+                    $consecutiveErrors = 0
+                }
+
+                if ($iteration % 12 -eq 0) {
+                    try {
+                        $enabledCount = 0
+                        $disabledCount = 0
+                        $sampleErrorMessage = $null
+                        $sampleErrorJob = $null
+                        if ($script:ManagedJobs) {
+                            $enabledCount = ($script:ManagedJobs.Values | Where-Object { $_.Enabled -and ($null -eq $_.DisabledUtc) }).Count
+                            $disabledCount = ($script:ManagedJobs.Values | Where-Object { $_.Enabled -and ($null -ne $_.DisabledUtc) }).Count
+                            try {
+                                $j = ($script:ManagedJobs.Values | Where-Object { $_.LastError } | Select-Object -First 1)
+                                if ($j) {
+                                    $sampleErrorJob = $j.Name
+                                    $sampleErrorMessage = $j.LastError.Exception.Message
+                                }
+                            }
+                            catch {}
+                        }
+                        Write-Host "[AV] Monitoring active - $enabledCount enabled / $disabledCount backoff" -ForegroundColor DarkGray
+                        Write-StabilityLog "Heartbeat: $enabledCount enabled / $disabledCount backoff, iteration $iteration" "INFO"
+                        Write-AVLog "Heartbeat: $enabledCount enabled / $disabledCount backoff"
+                        if ($sampleErrorMessage) {
+                            Write-StabilityLog "Sample job error ($sampleErrorJob): $sampleErrorMessage" "WARN"
+                        }
+                    }
+                    catch {
+                        $consecutiveErrors++
+                        Write-StabilityLog "Heartbeat failed: $_" "WARN"
+                    }
+                }
+
+                Start-Sleep -Seconds 1
+            }
+        }
+        catch {
+            try {
+                Write-StabilityLog "Monitor-Jobs outer loop error: $_" "ERROR"
+                Write-AVLog "Monitor-Jobs iteration error: $_" "ERROR"
+                Write-Host "[!] Monitor iteration error (recovering): $_" -ForegroundColor Yellow
+            }
+            catch {
+            }
+
+            Start-RecoverySequence
+            Start-Sleep -Seconds 5
+            $consecutiveErrors = 0
+            $lastStabilityCheck = Get-Date
+            continue
+        }
+    }
+}
+
+function Move-ToQuarantine {
+    param([string]$Path, [string]$Reason)
+    
+    $FileName = [System.IO.Path]::GetFileName($Path)
+    $QuarantineFile = "$($Config.QuarantinePath)\$([DateTime]::Now.Ticks)_$FileName"
+    
+    try {
+        [System.IO.File]::Move($Path, $QuarantineFile)
+        $Global:AntivirusState.FilesQuarantined++
+        Write-AVLog "Quarantined: $Path (Reason: $Reason)" "THREAT"
+        return $true
+    } catch {
+        Write-AVLog "Quarantine failed for $Path : $_" "ERROR"
+        return $false
+    }
+}
+
+function Stop-ThreatProcess {
+    param([int]$ProcessId, [string]$ProcessName)
+    
+    if ($ProcessId -eq $PID -or $ProcessId -eq $Script:SelfPID) { return }
+    
+    try {
+        Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+        $Global:AntivirusState.ProcessesTerminated++
+        Write-AVLog "Terminated threat process: $ProcessName (PID: $ProcessId)" "ACTION"
+    } catch {
+        Write-AVLog "Failed to terminate process $ProcessName : $_" "ERROR"
+    }
+}
+
+# ===================== Embedded detection modules =====================
 
 function Invoke-HashDetection {
     param(
@@ -993,7 +1746,7 @@ function Invoke-LOLBinDetection {
                     $Global:AntivirusState.ThreatCount++
                     
                     if ($Config.AutoKillThreats -and $Severity -in @("HIGH", "CRITICAL")) {
-                        Stop-Process -ProcessId $Proc.ProcessId -ProcessName $Proc.Name
+                        Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name
                     }
                 }
             }
@@ -1073,7 +1826,7 @@ function Invoke-ProcessAnomalyDetection {
         if ($Score -ge 6) {
             Write-AVLog "CRITICAL process anomaly - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Parent: $($Parent.Name) | Score: $Score | Anomalies: $($Anomalies -join ', ') | Path: $ProcPath | Command: $($Proc.CommandLine)" "THREAT" "behavior_detections.log"
             $Global:AntivirusState.ThreatCount++
-            if ($Config.AutoKillThreats) { Stop-Process -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
+            if ($Config.AutoKillThreats) { Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
         }
         elseif ($Score -ge 3) {
             Write-AVLog "Process anomaly detected - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Score: $Score | Anomalies: $($Anomalies -join ', ')" "WARNING" "behavior_detections.log"
@@ -1231,7 +1984,7 @@ function Invoke-AMSIBypassDetection {
                 
                 if ($detection.ProcessId -and $Config.AutoKillThreats) {
                     if ($detection.ProcessId -ne $PID -and $detection.ProcessId -ne $Script:SelfPID) {
-                        Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                        Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                     }
                 }
             }
@@ -1306,7 +2059,7 @@ function Invoke-CredentialDumpDetection {
                 Write-AVLog "LSASS access detected - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Command: $($Proc.CommandLine)" "THREAT" "credential_dumping_detections.log"
             }
             $Global:AntivirusState.ThreatCount++
-            if ($Config.AutoKillThreats) { Stop-Process -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
+            if ($Config.AutoKillThreats) { Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
         }
     }
     
@@ -1327,7 +2080,7 @@ function Invoke-CredentialDumpDetection {
             if ($detectionResult.IsThreat) {
                 Write-AVLog "Credential dumping tool detected via Advanced Framework - Tool: $($detectionResult.ThreatName) | Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Methods: $($detectionResult.DetectionMethods -join ', ') | Confidence: $($detectionResult.Confidence)%" "THREAT" "credential_dumping_detections.log"
                 $Global:AntivirusState.ThreatCount++
-                if ($Config.AutoKillThreats) { Stop-Process -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
+                if ($Config.AutoKillThreats) { Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
                 continue
             }
         }
@@ -1337,7 +2090,7 @@ function Invoke-CredentialDumpDetection {
             if ($Proc.Name -like "*$Tool*" -or $Proc.CommandLine -match $Tool) {
                 Write-AVLog "Credential dumping tool detected - Tool: $Tool | Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Command: $($Proc.CommandLine)" "THREAT" "credential_dumping_detections.log"
                 $Global:AntivirusState.ThreatCount++
-                if ($Config.AutoKillThreats) { Stop-Process -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
+                if ($Config.AutoKillThreats) { Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
             }
         }
         
@@ -1356,7 +2109,7 @@ function Invoke-CredentialDumpDetection {
         if ($Proc.ProcessId -eq $PID -or $Proc.ProcessId -eq $Script:SelfPID) { continue }
         Write-AVLog "Registry credential hive access - Process: $($Proc.Name) (PID: $($Proc.ProcessId)) | Command: $($Proc.CommandLine)" "THREAT" "credential_dumping_detections.log"
         $Global:AntivirusState.ThreatCount++
-        if ($Config.AutoKillThreats) { Stop-Process -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
+        if ($Config.AutoKillThreats) { Stop-ThreatProcess -ProcessId $Proc.ProcessId -ProcessName $Proc.Name }
     }
 }
 
@@ -1638,7 +2391,7 @@ function Invoke-DLLHijackingDetection {
                 
                 if ($detection.ProcessId -and $Config.AutoKillThreats) {
                     if ($detection.ProcessId -ne $PID -and $detection.ProcessId -ne $Script:SelfPID) {
-                        Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                        Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                     }
                 }
             }
@@ -1847,7 +2600,7 @@ function Invoke-ProcessHollowingDetection {
                 
                 if ($detection.ProcessId -and $Config.AutoKillThreats) {
                     if ($detection.ProcessId -ne $PID -and $detection.ProcessId -ne $Script:SelfPID) {
-                        Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                        Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                     }
                 }
             }
@@ -2040,7 +2793,7 @@ function Invoke-KeyloggerDetection {
                 
                 if ($detection.ProcessId -and $Config.AutoKillThreats) {
                     if ($detection.ProcessId -ne $PID -and $detection.ProcessId -ne $Script:SelfPID) {
-                        Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                        Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                     }
                 }
             }
@@ -2264,7 +3017,7 @@ function Invoke-RansomwareDetection {
                 
                 if ($detection.ProcessId -and $AutoKillThreats) {
                     if ($detection.ProcessId -ne $PID -and $detection.ProcessId -ne $Script:SelfPID) {
-                        Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                        Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                     }
                 }
             }
@@ -7132,7 +7885,7 @@ function Invoke-BeaconDetection {
                 $Global:AntivirusState.ThreatCount++
                 
                 if ($detection.ProcessId -and $Config.AutoKillThreats) {
-                    Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                    Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                 }
             }
             
@@ -7360,7 +8113,7 @@ function Invoke-CodeInjectionDetection {
                 $Global:AntivirusState.ThreatCount++
                 
                 if ($detection.ProcessId -and $Config.AutoKillThreats) {
-                    Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                    Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                 }
             }
             
@@ -7503,6 +8256,96 @@ function Test-SuspiciousDLL {
     }
     
     return $null
+}
+
+function Invoke-ElfCatcher {
+    $detections = @()
+    
+    try {
+        foreach ($target in $Script:BrowserTargets) {
+            try {
+                $procs = Get-Process -Name $target -ErrorAction SilentlyContinue
+                
+                foreach ($proc in $procs) {
+                    try {
+                        # Scan all loaded modules in the process
+                        $modules = $proc.Modules | Where-Object { $_.FileName -like "*.dll" -or $_.FileName -like "*.winmd" }
+                        
+                        foreach ($mod in $modules) {
+                            try {
+                                $dllName = [System.IO.Path]::GetFileName($mod.FileName)
+                                $dllPath = $mod.FileName
+                                
+                                # Check if we've already processed this DLL
+                                $key = "$($proc.Id):$dllPath"
+                                if ($Script:ProcessedDlls.ContainsKey($key)) {
+                                    continue
+                                }
+                                
+                                # Test for suspicious DLL
+                                $result = Test-SuspiciousDLL -DllName $dllName -DllPath $dllPath -ProcessName $proc.ProcessName
+                                
+                                if ($result) {
+                                    $detections += @{
+                                        ProcessId = $proc.Id
+                                        ProcessName = $proc.ProcessName
+                                        DllName = $dllName
+                                        DllPath = $dllPath
+                                        BaseAddress = $mod.BaseAddress.ToString()
+                                        Reasons = $result.Reasons
+                                        Risk = $result.Risk
+                                    }
+                                    
+                                    # Mark as processed
+                                    $Script:ProcessedDlls[$key] = Get-Date
+                                    
+                                    Write-AVLog "ELF CATCHER: Suspicious DLL in $($proc.ProcessName) (PID: $($proc.Id)) - $dllName - $($result.Reasons -join ', ')" "THREAT" "elf_catcher_detections.log"
+                                    $Global:AntivirusState.ThreatCount++
+                                }
+                            } catch {
+                                # Module may have unloaded during iteration
+                                continue
+                            }
+                        }
+                    } catch {
+                        # Process may have exited during iteration
+                        continue
+                    }
+                }
+            } catch {
+                # Process not found, continue
+                continue
+            }
+        }
+        
+        # Periodic cleanup of processed list to prevent memory bloat
+        if ($Script:ProcessedDlls.Count -gt 1000) {
+            $oldKeys = $Script:ProcessedDlls.Keys | Where-Object {
+                ((Get-Date) - $Script:ProcessedDlls[$_]).TotalHours -gt 24
+            }
+            foreach ($key in $oldKeys) {
+                $Script:ProcessedDlls.Remove($key)
+            }
+        }
+        
+        if ($detections.Count -gt 0) {
+            $logPath = "$env:ProgramData\AntivirusProtection\Logs\ElfCatcher_$(Get-Date -Format 'yyyy-MM-dd').log"
+            $logDir = Split-Path $logPath -Parent
+            if (!(Test-Path $logDir)) {
+                New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+            }
+            $detections | ForEach-Object {
+                "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')|PID:$($_.ProcessId)|$($_.ProcessName)|$($_.DllName)|$($_.DllPath)|$($_.Reasons -join ';')" |
+                    Add-Content -Path $logPath -ErrorAction SilentlyContinue
+            }
+            
+            Write-AVLog "ElfCatcher detection completed: $($detections.Count) suspicious DLL(s) found" "INFO" "elf_catcher_detections.log"
+        }
+    } catch {
+        Write-AVLog "ElfCatcher error: $_" "ERROR" "elf_catcher_detections.log"
+    }
+    
+    return $detections.Count
 }
 
 $Script:ScannedFiles = @{}
@@ -7892,7 +8735,7 @@ function Invoke-ProcessCreationDetection {
                 
                 if ($detection.ProcessId -and $Config.AutoKillThreats) {
                     if ($detection.ProcessId -ne $PID -and $detection.ProcessId -ne $Script:SelfPID) {
-                        Stop-Process -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
+                        Stop-ThreatProcess -ProcessId $detection.ProcessId -ProcessName $detection.ProcessName
                     }
                 }
             }
@@ -9039,106 +9882,528 @@ function Invoke-PrivacyForgeSpoofClipboard {
 
 #endregion
 
+# ===================== Independent Modules (No Whitelist/Response Engine) =====================
+# These modules operate independently and do not respect whitelists or use the response engine
+# They share logs and quarantine folders with the main antivirus
 
-# ==================== MAIN EXECUTION ====================
-
-# Request elevation (will exit and restart as admin if needed)
-Request-Elevation -Reason "Antivirus protection requires administrator privileges for full functionality."
-
-# Ensure quarantine folder exists
-if (-not (Test-Path $quarantineFolder)) {
-    New-Item -Path $quarantineFolder -ItemType Directory -Force | Out-Null
-}
-
-# Initial log
-$isAdmin = Test-IsAdmin
-Write-Log "Script initialized. Admin: $isAdmin, User: $env:USERNAME, SID: $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"
-
-# Ensure execution policy allows script
-if ((Get-ExecutionPolicy) -eq "Restricted") {
-    Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
-    Write-Log "Set execution policy to Bypass for current user."
-}
-
-# Load scanned files database
-if (Test-Path $localDatabase) {
+# ELF DLL Unloader - Actively unloads ELF DLLs from browser processes
+function Invoke-ElfDLLUnloader {
+    # This module operates independently - no whitelist checks, no response engine
     try {
-        $scannedFiles.Clear()
-        $lines = Get-Content $localDatabase -ErrorAction Stop
-        foreach ($line in $lines) {
-            if ($line -match "^([0-9a-f]{64}),(true|false)$") {
-                $scannedFiles[$matches[1]] = [bool]::Parse($matches[2])
-            }
-        }
-        Write-Log "Loaded $($scannedFiles.Count) scanned file entries from database."
-    } catch {
-        Write-Log "Failed to load database: $($_.Exception.Message)"
-        $scannedFiles.Clear()
-    }
-} else {
-    $scannedFiles.Clear()
-    New-Item -Path $localDatabase -ItemType File -Force -ErrorAction Stop | Out-Null
-    Write-Log "Created new database: $localDatabase"
+        # Add DLL unloader C# code if not already loaded
+        if (-not ([System.Management.Automation.PSTypeName]'DLLUnloader').Type) {
+            Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class DLLUnloader {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetProcAddress(IntPtr mod, string name);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetModuleHandle(string name);
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr CreateRemoteThread(IntPtr proc, IntPtr attr, uint stack, IntPtr start, IntPtr param, uint flags, IntPtr id);
+    [DllImport("kernel32.dll")]
+    public static extern uint WaitForSingleObject(IntPtr handle, uint ms);
+    [DllImport("kernel32.dll")]
+    public static extern bool CloseHandle(IntPtr handle);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool MoveFileEx(string src, string dst, int flags);
 }
-
-# Install to quarantine folder and add to startup
-Install-Antivirus
-
-# Run initial scan
-Remove-UnsignedDLLs
-
-# Setup file watchers for real-time protection
-Setup-FileWatchers
-
-# Keep script running
-Write-Host "Antivirus running. Press [Ctrl] + [C] to stop."
-try {
-    while ($true) {
-        $now = Get-Date
+"@
+        }
         
-        foreach ($jobName in $Script:JobIntervals.Keys) {
-            $interval = $Script:JobIntervals[$jobName]
-            $lastRun = $Script:LastJobRun[$jobName]
-            
-            # Check if job should run (never run or interval passed)
-            if (-not $lastRun -or ($now - $lastRun).TotalSeconds -ge $interval) {
+        $whitelist = @('ntdll.dll', 'kernel32.dll', 'kernelbase.dll', 'user32.dll', 'gdi32.dll', 'msvcrt.dll', 'advapi32.dll')
+        $targets = @('chrome', 'msedge', 'firefox', 'brave', 'opera', 'vivaldi', 'iexplore', 'microsoftedge', 'waterfox', 'palemoon')
+        
+        if (-not $Script:ElfDLLProcessed) {
+            $Script:ElfDLLProcessed = @{}
+        }
+        
+        $unloadedCount = 0
+        
+        foreach ($procName in $targets) {
+            $procs = Get-Process -Name $procName -ErrorAction SilentlyContinue
+            foreach ($proc in $procs) {
                 try {
-                    switch ($jobName) {
-                        "HashDetection" {
-                            Invoke-HashDetection -LogPath $logFile -QuarantinePath $quarantineFolder `
-                                -CirclHashLookupUrl $Config.CirclHashLookupUrl `
-                                -CymruApiUrl $Config.CymruApiUrl `
-                                -MalwareBazaarApiUrl $Config.MalwareBazaarApiUrl `
-                                -AutoQuarantine $Config.AutoQuarantine
-                        }
-                        "ProcessAnomaly" { Invoke-ProcessAnomalyDetection }
-                        "KeyloggerDetection" { Invoke-KeyloggerDetection }
-                        "RansomwareDetection" { Invoke-RansomwareDetection }
-                        "NetworkAnomaly" { Invoke-NetworkAnomalyDetection }
-                        "LOLBinDetection" { Invoke-LOLBinDetection }
-                        default {
-                            Write-Log "Unknown job name: $jobName"
+                    $hProc = [DLLUnloader]::OpenProcess(0x1F0FFF, $false, $proc.Id)
+                    if ($hProc -eq [IntPtr]::Zero) { continue }
+                    
+                    $freeLib = [DLLUnloader]::GetProcAddress([DLLUnloader]::GetModuleHandle("kernel32.dll"), "FreeLibrary")
+                    
+                    foreach ($mod in $proc.Modules) {
+                        $name = [System.IO.Path]::GetFileName($mod.FileName).ToLower()
+                        if ($whitelist -contains $name) { continue }
+                        
+                        $key = "$($proc.Id):$($mod.FileName)"
+                        if ($Script:ElfDLLProcessed.ContainsKey($key)) { continue }
+                        
+                        if ($name -like '*_elf.dll') {
+                            Write-AVLog "ELF DLL Unloader: Unloading $name from $procName (PID $($proc.Id))" "INFO" "elf_dll_unloader.log"
+                            
+                            $thread = [DLLUnloader]::CreateRemoteThread($hProc, [IntPtr]::Zero, 0, $freeLib, $mod.BaseAddress, 0, [IntPtr]::Zero)
+                            if ($thread -ne [IntPtr]::Zero) {
+                                [DLLUnloader]::WaitForSingleObject($thread, 5000) | Out-Null
+                                [DLLUnloader]::CloseHandle($thread) | Out-Null
+                                
+                                if ([DLLUnloader]::MoveFileEx($mod.FileName, $null, 4)) {
+                                    Write-AVLog "ELF DLL Unloader: Scheduled deletion on reboot: $($mod.FileName)" "INFO" "elf_dll_unloader.log"
+                                }
+                                
+                                $unloadedCount++
+                            }
+                            $Script:ElfDLLProcessed[$key] = Get-Date
                         }
                     }
-                    $Script:LastJobRun[$jobName] = $now
+                    
+                    [DLLUnloader]::CloseHandle($hProc) | Out-Null
                 } catch {
-                    Write-Log "Job $jobName failed: $($_.Exception.Message)"
+                    Write-AVLog "ELF DLL Unloader error for process $procName (PID: $($proc.Id)): $_" "WARN" "elf_dll_unloader.log"
                 }
             }
         }
         
-        Start-Sleep -Seconds 10
+        # Cleanup old processed entries
+        if ($Script:ElfDLLProcessed.Count -gt 1000) {
+            $oldKeys = $Script:ElfDLLProcessed.Keys | Where-Object {
+                ((Get-Date) - $Script:ElfDLLProcessed[$_]).TotalHours -gt 24
+            }
+            foreach ($key in $oldKeys) {
+                $Script:ElfDLLProcessed.Remove($key)
+            }
+        }
+        
+        if ($unloadedCount -gt 0) {
+            Write-AVLog "ELF DLL Unloader: Unloaded $unloadedCount ELF DLL(s)" "INFO" "elf_dll_unloader.log"
+        }
+        
+        return $unloadedCount
+    } catch {
+        Write-AVLog "ELF DLL Unloader error: $_" "ERROR" "elf_dll_unloader.log"
+        return 0
+    }
+}
+
+# Unsigned DLL Remover - Scans and quarantines unsigned DLLs/WINMD files
+function Invoke-UnsignedDLLRemover {
+    # This module operates independently - no whitelist checks, no response engine
+    try {
+        # Initialize scanned files database
+        $localDatabase = "$($Config.DatabasePath)\scanned_dlls.txt"
+        if (-not $Script:UnsignedDLLScannedFiles) {
+            $Script:UnsignedDLLScannedFiles = @{}
+            
+            # Load existing database
+            if (Test-Path $localDatabase) {
+                try {
+                    $lines = Get-Content $localDatabase -ErrorAction Stop
+                    foreach ($line in $lines) {
+                        if ($line -match "^([0-9a-f]{64}),(true|false)$") {
+                            $Script:UnsignedDLLScannedFiles[$matches[1]] = [bool]$matches[2]
+                        }
+                    }
+                    Write-AVLog "Unsigned DLL Remover: Loaded $($Script:UnsignedDLLScannedFiles.Count) scanned file entries" "INFO" "unsigned_dll_remover.log"
+                } catch {
+                    Write-AVLog "Unsigned DLL Remover: Failed to load database: $_" "WARN" "unsigned_dll_remover.log"
+                }
+            }
+        }
+        
+        $quarantinedCount = 0
+        
+        # Helper function to check if file should be excluded
+        function Should-ExcludeDLLFile {
+            param ([string]$filePath)
+            $lowerPath = $filePath.ToLower()
+            
+            # Exclude assembly folders
+            if ($lowerPath -like "*\assembly\*") {
+                return $true
+            }
+            
+            # Exclude ctfmon-related files
+            if ($lowerPath -like "*ctfmon*" -or $lowerPath -like "*msctf.dll" -or $lowerPath -like "*msutb.dll") {
+                return $true
+            }
+            
+            # Exclude antivirus installation path
+            if ($lowerPath -like "*$($Config.QuarantinePath -replace '\\', '\\')*") {
+                return $true
+            }
+            
+            return $false
+        }
+        
+        # Helper function to set file ownership and permissions
+        function Set-DLLFileOwnership {
+            param ([string]$filePath)
+            try {
+                takeown /F $filePath /A 2>&1 | Out-Null
+                icacls $filePath /reset 2>&1 | Out-Null
+                icacls $filePath /grant "Administrators:F" /inheritance:d 2>&1 | Out-Null
+                return $true
+            } catch {
+                return $false
+            }
+        }
+        
+        # Helper function to stop processes using DLL
+        function Stop-ProcessesUsingDLL {
+            param ([string]$filePath)
+            try {
+                $processes = Get-Process | Where-Object { 
+                    ($_.Modules | Where-Object { $_.FileName -eq $filePath }) 
+                } -ErrorAction SilentlyContinue
+                
+                foreach ($process in $processes) {
+                    try {
+                        Stop-Process -Id $process.Id -Force -ErrorAction Stop
+                        Write-AVLog "Unsigned DLL Remover: Stopped process $($process.Name) (PID: $($process.Id)) using $filePath" "INFO" "unsigned_dll_remover.log"
+                    } catch {
+                        try {
+                            taskkill /PID $process.Id /F 2>&1 | Out-Null
+                            Write-AVLog "Unsigned DLL Remover: Force-killed process $($process.Name) (PID: $($process.Id))" "INFO" "unsigned_dll_remover.log"
+                        } catch { }
+                    }
+                }
+            } catch { }
+        }
+        
+        # Helper function to calculate file hash and signature
+        function Get-DLLFileHash {
+            param ([string]$filePath)
+            try {
+                $signature = Get-AuthenticodeSignature -FilePath $filePath -ErrorAction Stop
+                $hash = Get-FileHash -Path $filePath -Algorithm SHA256 -ErrorAction Stop
+                return @{
+                    Hash = $hash.Hash.ToLower()
+                    Status = $signature.Status
+                }
+            } catch {
+                return $null
+            }
+        }
+        
+        # Helper function to quarantine file (uses shared quarantine folder)
+        function Quarantine-DLLFile {
+            param ([string]$filePath)
+            try {
+                $fileName = Split-Path -Leaf $filePath
+                $quarantinePath = Join-Path -Path $Config.QuarantinePath -ChildPath "$([DateTime]::Now.Ticks)_$fileName"
+                
+                if (-not (Test-Path $Config.QuarantinePath)) {
+                    New-Item -ItemType Directory -Path $Config.QuarantinePath -Force | Out-Null
+                }
+                
+                Move-Item -Path $filePath -Destination $quarantinePath -Force -ErrorAction Stop
+                Write-AVLog "Unsigned DLL Remover: Quarantined $filePath to $quarantinePath" "INFO" "unsigned_dll_remover.log"
+                return $true
+            } catch {
+                Write-AVLog "Unsigned DLL Remover: Failed to quarantine ${filePath}: $_" "WARN" "unsigned_dll_remover.log"
+                return $false
+            }
+        }
+        
+        # Scan drives for unsigned DLLs
+        $drives = Get-CimInstance -ClassName Win32_LogicalDisk | Where-Object { $_.DriveType -in (2, 3, 4) }
+        
+        foreach ($drive in $drives) {
+            $root = $drive.DeviceID + "\"
+            try {
+                # Limit scan to prevent excessive resource usage
+                $dllFiles = Get-ChildItem -Path $root -Include *.dll,*.winmd -Recurse -File -ErrorAction SilentlyContinue |
+                    Where-Object { -not (Should-ExcludeDLLFile -filePath $_.FullName) } |
+                    Select-Object -First 500
+                
+                foreach ($dll in $dllFiles) {
+                    try {
+                        $fileHash = Get-DLLFileHash -filePath $dll.FullName
+                        if (-not $fileHash) { continue }
+                        
+                        if ($Script:UnsignedDLLScannedFiles.ContainsKey($fileHash.Hash)) {
+                            # Already scanned - check if invalid
+                            if (-not $Script:UnsignedDLLScannedFiles[$fileHash.Hash]) {
+                                # Previously found invalid - quarantine if still exists
+                                if (Test-Path $dll.FullName) {
+                                    if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                        Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                        if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                            $quarantinedCount++
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            # New file - check signature
+                            $isValid = $fileHash.Status -eq "Valid"
+                            $Script:UnsignedDLLScannedFiles[$fileHash.Hash] = $isValid
+                            
+                            # Save to database
+                            "$($fileHash.Hash),$isValid" | Out-File -FilePath $localDatabase -Append -Encoding UTF8 -ErrorAction SilentlyContinue
+                            
+                            if (-not $isValid) {
+                                # Unsigned DLL found - quarantine it
+                                Write-AVLog "Unsigned DLL Remover: Found unsigned DLL: $($dll.FullName) (Hash: $($fileHash.Hash))" "INFO" "unsigned_dll_remover.log"
+                                
+                                if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                    Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                    if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                        $quarantinedCount++
+                                    }
+                                }
+                            }
+                        }
+                    } catch {
+                        Write-AVLog "Unsigned DLL Remover: Error processing $($dll.FullName): $_" "WARN" "unsigned_dll_remover.log"
+                    }
+                }
+            } catch {
+                Write-AVLog "Unsigned DLL Remover: Scan failed for drive ${root}: $_" "WARN" "unsigned_dll_remover.log"
+            }
+        }
+        
+        # Explicit System32 scan (limited)
+        try {
+            $system32Files = Get-ChildItem -Path "C:\Windows\System32" -Include *.dll,*.winmd -File -ErrorAction SilentlyContinue |
+                Where-Object { -not (Should-ExcludeDLLFile -filePath $_.FullName) } |
+                Select-Object -First 200
+            
+            foreach ($dll in $system32Files) {
+                try {
+                    $fileHash = Get-DLLFileHash -filePath $dll.FullName
+                    if (-not $fileHash) { continue }
+                    
+                    if ($Script:UnsignedDLLScannedFiles.ContainsKey($fileHash.Hash)) {
+                        if (-not $Script:UnsignedDLLScannedFiles[$fileHash.Hash]) {
+                            if (Test-Path $dll.FullName) {
+                                if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                    Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                    if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                        $quarantinedCount++
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        $isValid = $fileHash.Status -eq "Valid"
+                        $Script:UnsignedDLLScannedFiles[$fileHash.Hash] = $isValid
+                        "$($fileHash.Hash),$isValid" | Out-File -FilePath $localDatabase -Append -Encoding UTF8 -ErrorAction SilentlyContinue
+                        
+                        if (-not $isValid) {
+                            Write-AVLog "Unsigned DLL Remover: Found unsigned System32 DLL: $($dll.FullName)" "INFO" "unsigned_dll_remover.log"
+                            
+                            if (Set-DLLFileOwnership -filePath $dll.FullName) {
+                                Stop-ProcessesUsingDLL -filePath $dll.FullName
+                                if (Quarantine-DLLFile -filePath $dll.FullName) {
+                                    $quarantinedCount++
+                                }
+                            }
+                        }
+                    }
+                } catch { }
+            }
+        } catch { }
+        
+        if ($quarantinedCount -gt 0) {
+            Write-AVLog "Unsigned DLL Remover: Quarantined $quarantinedCount unsigned DLL(s)" "INFO" "unsigned_dll_remover.log"
+        }
+        
+        return $quarantinedCount
+    } catch {
+        Write-AVLog "Unsigned DLL Remover error: $_" "ERROR" "unsigned_dll_remover.log"
+        return 0
+    }
+}
+
+# ===================== Main =====================
+
+try {
+    if ($Uninstall) {
+        Uninstall-Antivirus
+    }
+
+    # Check for administrator privileges
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    
+    if (-not $isAdmin) {
+        Write-Host "`n[!] WARNING: Script is not running as Administrator!" -ForegroundColor Red
+        Write-Host "[!] Some features require administrator privileges:" -ForegroundColor Yellow
+        Write-Host "    - WebcamGuardian (device control)" -ForegroundColor Yellow
+        Write-Host "    - Password Management (registry access)" -ForegroundColor Yellow
+        Write-Host "    - Some detection modules" -ForegroundColor Yellow
+        Write-Host "`n[i] To run with full functionality, right-click PowerShell and select 'Run as Administrator'" -ForegroundColor Cyan
+        Write-Host "`n[i] Continuing with limited functionality...`n" -ForegroundColor Gray
+        Write-StabilityLog "Script running without administrator privileges - limited functionality" "WARN"
+    } else {
+        Write-StabilityLog "Script running with administrator privileges" "INFO"
+    }
+
+    Write-Host "`nAntivirus Protection (Single File)`n" -ForegroundColor Cyan
+    Write-StabilityLog "=== Antivirus Starting ==="
+
+    Write-StabilityLog "Executing script path: $PSCommandPath" "INFO"
+
+    # <CHANGE> Clean up elevation flag on exit
+$flagFile = "$env:ProgramData\AntivirusProtection\.elevated"
+Register-EngineEvent PowerShell.Exiting -Action { Remove-Item $flagFile -Force -ErrorAction SilentlyContinue } | Out-Null
+    Register-ExitCleanup
+    
+    Request-Elevation -Reason "Antivirus protection requires administrator privileges for full functionality."
+    
+    Install-Antivirus
+    
+    # Only initialize mutex if not already initialized during installation
+    if (-not $Global:AntivirusState.Running) {
+        Initialize-Mutex
+    }
+
+    Register-TerminationProtection
+
+Write-Host "`n[PROTECTION] Initializing anti-termination safeguards..." -ForegroundColor Cyan
+
+if ($host.Name -eq "Windows PowerShell ISE Host") {
+    # In ISE, use trap handler which is already defined at the top
+    Write-Host "[PROTECTION] ISE detected - using trap-based Ctrl+C protection" -ForegroundColor Cyan
+    Write-Host "[PROTECTION] Ctrl+C protection enabled (requires $Script:MaxTerminationAttempts attempts to stop)" -ForegroundColor Green
+} else {
+    # In regular console, use the Console.CancelKeyPress handler
+    Enable-CtrlCProtection
+}
+
+# Enable auto-restart if running as admin
+try {
+    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($isAdmin) {
+        Enable-AutoRestart
+        Start-ProcessWatchdog
+    } else {
+        Write-Host "[INFO] Auto-restart requires administrator privileges (optional)" -ForegroundColor Gray
     }
 } catch {
-    Write-Log "Main loop ended: $($_.Exception.Message)"
+    Write-Host "[WARNING] Some protection features failed to initialize: $($_.Exception.Message)" -ForegroundColor Yellow
 }
-finally {
-    # Cleanup mutex on exit
-    if ($script:ElevationMutex) {
+
+Write-Host "[PROTECTION] Anti-termination safeguards active" -ForegroundColor Green
+    Write-Host "[*] Starting detection jobs...`n" -ForegroundColor Cyan
+
+    $loaded = 0
+    $failed = 0
+
+    $moduleNames = @(
+        "HashDetection",
+        "LOLBinDetection",
+        "ProcessAnomalyDetection",
+        "AMSIBypassDetection",
+        "CredentialDumpDetection",
+        "WMIPersistenceDetection",
+        "ScheduledTaskDetection",
+        "RegistryPersistenceDetection",
+        "DLLHijackingDetection",
+        "TokenManipulationDetection",
+        "ProcessHollowingDetection",
+        "KeyloggerDetection",
+        "KeyScramblerManagement",
+        "RansomwareDetection",
+        "NetworkAnomalyDetection",
+        "NetworkTrafficMonitoring",
+        "RootkitDetection",
+        "ClipboardMonitoring",
+        "COMMonitoring",
+        "BrowserExtensionMonitoring",
+        "ShadowCopyMonitoring",
+        "USBMonitoring",
+        "MobileDeviceMonitoring",
+        "AttackToolsDetection",
+        "AdvancedThreatDetection",
+        "EventLogMonitoring",
+        "FirewallRuleMonitoring",
+        "ServiceMonitoring",
+        "FilelessDetection",
+        "MemoryScanning",
+        "NamedPipeMonitoring",
+        "DNSExfiltrationDetection",
+        "PasswordManagement",
+        "WebcamGuardian",
+        "BeaconDetection",
+        "CodeInjectionDetection",
+        "DataExfiltrationDetection",
+        "ElfCatcher",
+        "FileEntropyDetection",
+        "HoneypotMonitoring",
+        "LateralMovementDetection",
+        "ProcessCreationDetection",
+        "QuarantineManagement",
+        "ReflectiveDLLInjectionDetection",
+        "ResponseEngine",
+        "PrivacyForgeSpoofing",
+        "ElfDLLUnloader",
+        "UnsignedDLLRemover"
+    )
+
+    foreach ($modName in $moduleNames) {
+        $key = "${modName}IntervalSeconds"
+        $interval = if ($Script:ManagedJobConfig.ContainsKey($key)) { $Script:ManagedJobConfig[$key] } else { 60 }
+
         try {
-            $script:ElevationMutex.ReleaseMutex()
-            $script:ElevationMutex.Dispose()
-        } catch {}
+            Start-ManagedJob -ModuleName $modName -IntervalSeconds $interval
+
+            if ($Global:AntivirusState.Jobs.ContainsKey("AV_$modName")) {
+                Write-Host "[+] $modName ($interval sec)" -ForegroundColor Green
+                Write-StabilityLog "Successfully started module: $modName"
+                $loaded++
+            }
+            else {
+                Write-Host "[!] $modName - skipped" -ForegroundColor Yellow
+                Write-StabilityLog "Module skipped: $modName" "WARN"
+                $failed++
+            }
+        }
+        catch {
+            Write-Host "[!] Failed to start $modName : $_" -ForegroundColor Red
+            Write-StabilityLog "Module start failed: $modName - $_" "ERROR"
+            Write-AVLog "Module start failed: $modName - $_" "ERROR"
+            $failed++
+        }
     }
-    Write-Log "Antivirus stopped."
+
+    Write-Host "`n[+] Started $loaded modules" -ForegroundColor Green
+    if ($failed -gt 0) {
+        Write-Host "[!] $failed modules failed to start" -ForegroundColor Yellow
+    }
+
+    Write-StabilityLog "Module start complete: $loaded started, $failed failed"
+
+    try {
+        $mjCount = if ($script:ManagedJobs) { $script:ManagedJobs.Count } else { 0 }
+        Write-StabilityLog "Managed jobs registered after start: $mjCount" "INFO"
+        Write-Host "[AV] Managed jobs registered: $mjCount" -ForegroundColor DarkGray
+    }
+    catch {}
+
+    Write-Host "`n========================================" -ForegroundColor Green
+    Write-Host "  Antivirus Protection ACTIVE" -ForegroundColor Green
+    Write-Host "  Active jobs: $($Global:AntivirusState.Jobs.Count)" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "`nPress Ctrl+C to stop`n" -ForegroundColor Yellow
+
+    Write-StabilityLog "Antivirus fully started with $($Global:AntivirusState.Jobs.Count) active jobs"
+    Write-AVLog "About to enter Monitor-Jobs loop"
+
+    Monitor-Jobs
+}
+catch {
+    $err = $_.Exception.Message
+    Write-Host "`n[!] Critical error: $err`n" -ForegroundColor Red
+    Write-StabilityLog "Critical startup error: $err" "ERROR"
+    Write-AVLog "Startup error: $err" "ERROR"
+
+    if ($err -like "*already running*") {
+        Write-Host "[i] Another instance is running. Exiting.`n" -ForegroundColor Yellow
+        Write-StabilityLog "Blocked duplicate instance - exiting" "INFO"
+        exit 1
+    }
+
+    Write-StabilityLog "Exiting due to startup failure" "ERROR"
+    exit 1
 }
