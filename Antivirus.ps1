@@ -7,10 +7,15 @@ param([switch]$Uninstall)
 # Author: Gorstak
 # ============================================================================
 
+# Install
+New-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "Antivirus" -Value 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:\ProgramData\Gorstak\Antivirus\Antivirus.ps1"' -PropertyType String -Force
+New-Item -Path C:\ProgramData\Gorstak\Antivirus -ItemType Directory -Force | Out-Null
+Copy-Item -Path $PSCommandPath -Destination C:\ProgramData\Gorstak\Antivirus -Force
+
 # Unique script identifier (GUID) - used for process identification and mutex naming
 $Script:ScriptGUID = "539EF6B5-578B-4AF3-A5C7-FD564CB9C8FB"
 
-$Script:InstallPath = "C:\ProgramData\AntivirusProtection"
+$Script:InstallPath = "C:\ProgramData\Gorstak\Antivirus"
 $Script:ScriptName = Split-Path -Leaf $PSCommandPath
 $Script:MaxRestartAttempts = 3
 $Script:StabilityLogPath = "$Script:InstallPath\Logs\stability_log.txt"
