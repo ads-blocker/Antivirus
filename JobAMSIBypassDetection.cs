@@ -37,7 +37,7 @@ namespace Edr
                     {
                         EdrLog.Write(Name, "AMSI BYPASS: " + p.Name + " (PID: " + p.ProcessId + ") - " + pat, "THREAT", "amsi_bypass_detections.log");
                         EdrState.ThreatCount++;
-                        EdrGlobalRules.KillIfAllowed(p.ProcessId, p.Name, p.ExecutablePath, ct);
+                        EdrGlobalRules.RespondToBehavioralThreat(p.ProcessId, p.Name, p.ExecutablePath, ThreatLevel.High);
                         break;
                     }
                 }
@@ -46,7 +46,7 @@ namespace Edr
                 {
                     EdrLog.Write(Name, "AMSI BYPASS (obfuscated): " + p.Name + " (PID: " + p.ProcessId + ") long encoded command", "THREAT", "amsi_bypass_detections.log");
                     EdrState.ThreatCount++;
-                    EdrGlobalRules.KillIfAllowed(p.ProcessId, p.Name, p.ExecutablePath, ct);
+                    EdrGlobalRules.RespondToBehavioralThreat(p.ProcessId, p.Name, p.ExecutablePath, ThreatLevel.Critical);
                 }
             }
 

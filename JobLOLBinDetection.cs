@@ -53,8 +53,8 @@ namespace Edr
 
                     EdrLog.Write(Name, "LOLBin [" + lb.Severity + "] Process: " + p.Name + " (PID: " + p.ProcessId + ") | " + lb.Description + " | Patterns: " + string.Join(", ", matched) + " | " + cmd, "THREAT", "behavior_detections.log");
                     EdrState.ThreatCount++;
-                    if (lb.Severity == "HIGH" || lb.Severity == "CRITICAL")
-                        EdrGlobalRules.KillIfAllowed(p.ProcessId, p.Name, p.ExecutablePath, ct);
+                    var level = lb.Severity == "CRITICAL" ? ThreatLevel.Critical : lb.Severity == "HIGH" ? ThreatLevel.High : ThreatLevel.Medium;
+                    EdrGlobalRules.RespondToBehavioralThreat(p.ProcessId, p.Name, p.ExecutablePath, level);
                     break;
                 }
             }

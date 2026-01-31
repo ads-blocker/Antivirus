@@ -67,11 +67,13 @@ namespace Edr
                 {
                     EdrLog.Write(Name, "CRITICAL process anomaly - " + proc.Name + " (PID: " + proc.ProcessId + ") | Parent: " + (parent != null ? parent.Name : "") + " | Score: " + score + " | " + string.Join(", ", anomalies) + " | " + path + " | " + cmd, "THREAT", "behavior_detections.log");
                     EdrState.ThreatCount++;
-                    EdrGlobalRules.KillIfAllowed(proc.ProcessId, proc.Name, proc.ExecutablePath, ct);
+                    EdrGlobalRules.RespondToBehavioralThreat(proc.ProcessId, proc.Name, proc.ExecutablePath, ThreatLevel.Critical);
                 }
                 else if (score >= 3)
                 {
                     EdrLog.Write(Name, "Process anomaly - " + proc.Name + " (PID: " + proc.ProcessId + ") | Score: " + score + " | " + string.Join(", ", anomalies), "WARNING", "behavior_detections.log");
+                    EdrState.ThreatCount++;
+                    EdrGlobalRules.RespondToBehavioralThreat(proc.ProcessId, proc.Name, proc.ExecutablePath, ThreatLevel.Medium);
                 }
             }
         }

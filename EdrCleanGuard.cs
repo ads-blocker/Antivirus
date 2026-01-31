@@ -30,29 +30,32 @@ namespace Edr
             if (allowlisted) return CleanGuardVerdict.Allow;
             if (ct.IsCancellationRequested) return CleanGuardVerdict.Allow;
 
-            int circlTrust = -1;
+            string circlJson = null;
             try
             {
                 string url = EdrConfig.CirclHashLookupUrl.TrimEnd('/') + "/" + sha256;
-                string json = HttpGet(url);
-                var m = Regex.Match(json ?? "", @"[""']hashlookup:trust[""']\s*:\s*(\d+)", RegexOptions.IgnoreCase);
-                if (m.Success) int.TryParse(m.Groups[1].Value, out circlTrust);
+                circlJson = HttpGet(url);
             }
             catch { }
+            // Circl KnownMalicious = 1 of 3 APIs reports malware
+            if (circlJson != null && circlJson.IndexOf("\"KnownMalicious\"", StringComparison.OrdinalIgnoreCase) >= 0)
+                return CleanGuardVerdict.Malicious;
+            int circlTrust = -1;
+            if (circlJson != null)
+            {
+                var m = Regex.Match(circlJson, @"[""']hashlookup:trust[""']\s*:\s*(\d+)", RegexOptions.IgnoreCase);
+                if (m.Success) int.TryParse(m.Groups[1].Value, out circlTrust);
+            }
             if (circlTrust >= CirclTrustThreshold) return CleanGuardVerdict.KnownGood;
 
             if (ct.IsCancellationRequested) return CleanGuardVerdict.Allow;
-            try
-            {
-                if (MalwareBazaarHashFound(sha256)) return CleanGuardVerdict.Malicious;
-            }
+            // MalwareBazaar = 1 of 3 APIs reports malware
+            try { if (MalwareBazaarHashFound(sha256)) return CleanGuardVerdict.Malicious; }
             catch { }
 
             if (ct.IsCancellationRequested) return CleanGuardVerdict.Allow;
-            try
-            {
-                if (CymruMalicious(sha256)) return CleanGuardVerdict.Malicious;
-            }
+            // Cymru = 1 of 3 APIs reports malware
+            try { if (CymruMalicious(sha256)) return CleanGuardVerdict.Malicious; }
             catch { }
 
             return CleanGuardVerdict.Allow;

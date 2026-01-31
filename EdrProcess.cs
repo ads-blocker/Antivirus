@@ -2,12 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Management;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Edr
 {
     public static class EdrProcess
     {
+        const uint PROCESS_SUSPEND_RESUME = 0x0800;
+        [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr hObject);
+        [DllImport("ntdll.dll")] static extern int NtSuspendProcess(IntPtr processHandle);
         public static int CurrentPid { get { return Process.GetCurrentProcess().Id; } }
 
         public sealed class ProcInfo
@@ -52,6 +57,25 @@ namespace Edr
             if (child == null || all == null) return null;
             foreach (var p in all) { if (p.ProcessId == child.ParentProcessId) return p; }
             return null;
+        }
+
+        /// <summary>Suspend process to block malware execution (Medium threat). Requires admin.</summary>
+        public static void SuspendThreat(int processId, string processName)
+        {
+            if (processId == CurrentPid) return;
+            IntPtr h = IntPtr.Zero;
+            try
+            {
+                h = OpenProcess(PROCESS_SUSPEND_RESUME, false, processId);
+                if (h == IntPtr.Zero || h == new IntPtr(-1)) return;
+                if (NtSuspendProcess(h) == 0)
+                {
+                    EdrState.ProcessesSuspended++;
+                    EdrLog.Write("EdrProcess", "Suspended threat process: " + processName + " (PID: " + processId + ")", "ACTION");
+                }
+            }
+            catch (Exception ex) { EdrLog.Write("EdrProcess", "Failed to suspend " + processName + ": " + ex.Message, "ERROR"); }
+            finally { if (h != IntPtr.Zero && h != new IntPtr(-1)) CloseHandle(h); }
         }
 
         public static void KillThreat(int processId, string processName)

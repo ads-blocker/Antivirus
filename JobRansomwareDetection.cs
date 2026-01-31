@@ -26,7 +26,7 @@ namespace Edr
                     {
                         EdrLog.Write(Name, "RANSOMWARE: " + p.Name + " (PID: " + p.ProcessId + ") | " + pat, "THREAT", "ransomware_detections.log");
                         EdrState.ThreatCount++;
-                        EdrGlobalRules.KillIfAllowed(p.ProcessId, p.Name, p.ExecutablePath, ct);
+                        EdrGlobalRules.RespondToBehavioralThreat(p.ProcessId, p.Name, p.ExecutablePath, ThreatLevel.Critical);
                         break;
                     }
                 }

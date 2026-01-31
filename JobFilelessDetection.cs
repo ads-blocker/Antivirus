@@ -28,7 +28,7 @@ namespace Edr
                     {
                         EdrLog.Write(Name, "Fileless indicator: " + pat + " | " + p.Name + " (PID: " + p.ProcessId + ")", "THREAT", "fileless_detection.log");
                         EdrState.ThreatCount++;
-                        EdrGlobalRules.KillIfAllowed(p.ProcessId, p.Name, p.ExecutablePath, ct);
+                        EdrGlobalRules.RespondToBehavioralThreat(p.ProcessId, p.Name, p.ExecutablePath, ThreatLevel.High);
                         break;
                     }
                 }
