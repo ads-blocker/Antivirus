@@ -8,7 +8,7 @@ namespace Edr
     public sealed class JobAMSIBypassDetection : IEdrJob
     {
         public string Name { get { return "AMSIBypassDetection"; } }
-        public int IntervalSeconds { get { return 15; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] BypassPatterns = new[]
         {

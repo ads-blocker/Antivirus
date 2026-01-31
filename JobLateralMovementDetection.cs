@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobLateralMovementDetection : IEdrJob
     {
         public string Name { get { return "LateralMovementDetection"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] Patterns = new[] { "psexec", "wmic /node:", "winrs ", "sc \\\\", "schtasks /s ", "at \\\\", "copy \\\\", "net use" };
 

@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobAttackToolsDetection : IEdrJob
     {
         public string Name { get { return "AttackToolsDetection"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] Tools = new[] { "mimikatz", "pwdump", "procdump", "wce", "gsecdump", "cain", "john", "hashcat", "hydra", "medusa", "nmap", "metasploit", "armitage" };
 

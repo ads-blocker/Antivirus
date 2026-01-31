@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobNetworkAnomalyDetection : IEdrJob
     {
         public string Name { get { return "NetworkAnomalyDetection"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly int[] SuspiciousPorts = new[] { 4444, 5555, 6666, 8080, 31337, 12345 };
 

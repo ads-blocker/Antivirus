@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobRansomwareDetection : IEdrJob
     {
         public string Name { get { return "RansomwareDetection"; } }
-        public int IntervalSeconds { get { return 15; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] Patterns = new[] { "vssadmin delete shadows", "vssadmin.exe delete", "wbadmin delete catalog", "bcdedit", "shadow copy", "shadowcopy", "cryptolocker", "wannacry", ".encrypted", ".locked", ".crypto" };
 

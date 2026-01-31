@@ -7,12 +7,13 @@ namespace Edr
     public sealed class JobClipboardMonitoring : IEdrJob
     {
         public string Name { get { return "ClipboardMonitoring"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         public void Run(CancellationToken ct)
         {
             try
             {
+                if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA) return;
                 if (Clipboard.ContainsText())
                 {
                     string t = Clipboard.GetText();

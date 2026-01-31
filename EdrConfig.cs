@@ -17,7 +17,7 @@ namespace Edr
         public const string YaraRulesFileName = "rules.yar";
 
         public const bool AutoKillThreats = true;
-        public const bool AutoBlockThreats = true;  // Suspend process for Medium threat (block execution)
+        public const bool AutoBlockThreats = false;  // Suspend leaves processes frozen permanently; log only for Medium threat
         public const bool AutoQuarantine = true;
         public const string CirclHashLookupUrl = "https://hashlookup.circl.lu/lookup/sha256";
         public const string CymruApiUrl = "https://api.malwarehash.cymru.com/v1/hash";

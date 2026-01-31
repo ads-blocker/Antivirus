@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobUSBMonitoring : IEdrJob
     {
         public string Name { get { return "USBMonitoring"; } }
-        public int IntervalSeconds { get { return 20; } }
+        public int IntervalSeconds { get { return 90; } }
 
         public void Run(CancellationToken ct)
         {

@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobReflectiveDLLInjectionDetection : IEdrJob
     {
         public string Name { get { return "ReflectiveDLLInjectionDetection"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] Patterns = new[] { "ReflectiveLoader", "LoadLibraryR", "LdrLoadDll", "NtMapViewOfSection", "VirtualAllocEx", "WriteProcessMemory" };
 

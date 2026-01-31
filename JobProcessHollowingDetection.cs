@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobProcessHollowingDetection : IEdrJob
     {
         public string Name { get { return "ProcessHollowingDetection"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly HashSet<string> SuspiciousParents = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "explorer.exe", "winlogon.exe", "services.exe" };
         static readonly HashSet<string> SuspiciousChildren = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "notepad.exe", "calc.exe", "cmd.exe", "powershell.exe", "wmic.exe", "rundll32.exe" };

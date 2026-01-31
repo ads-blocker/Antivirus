@@ -175,5 +175,34 @@ namespace Edr
             }
         }
 
+        /// <summary>Revert credential protection changes that cause persistent system slowness. Run as admin.</summary>
+        public static void RevertCredentialProtection()
+        {
+            try
+            {
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Lsa", true))
+                { if (key != null) key.SetValue("RunAsPPL", 0, RegistryValueKind.DWord); }
+            }
+            catch { }
+            try
+            {
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon", true))
+                { if (key != null) key.SetValue("CachedLogonsCount", "10", RegistryValueKind.String); }
+            }
+            catch { }
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "auditpol",
+                    Arguments = "/set /subcategory:\"Credential Validation\" /success:disable /failure:disable",
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (var p = Process.Start(psi))
+                { if (p != null) p.WaitForExit(5000); }
+            }
+            catch { }
+        }
     }
 }

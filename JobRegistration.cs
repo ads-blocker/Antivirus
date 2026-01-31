@@ -12,7 +12,7 @@ namespace Edr
             runner.Register(new JobProcessAnomalyDetection());
             runner.Register(new JobAMSIBypassDetection());
             runner.Register(new JobCredentialDumpDetection());
-            runner.Register(new JobCredentialProtection());
+            // runner.Register(new JobCredentialProtection());  // Disabled: permanent auditpol + credential clearing causes persistent system slowness
             runner.Register(new JobWMIPersistenceDetection());
             runner.Register(new JobScheduledTaskDetection());
             runner.Register(new JobRegistryPersistenceDetection());

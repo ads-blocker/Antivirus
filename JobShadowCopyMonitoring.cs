@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobShadowCopyMonitoring : IEdrJob
     {
         public string Name { get { return "ShadowCopyMonitoring"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         public void Run(CancellationToken ct)
         {

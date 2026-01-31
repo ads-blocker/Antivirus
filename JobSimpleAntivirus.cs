@@ -8,7 +8,7 @@ namespace Edr
     public sealed class JobSimpleAntivirus : IEdrJob
     {
         public string Name { get { return "SimpleAntivirus"; } }
-        public int IntervalSeconds { get { return 60; } }
+        public int IntervalSeconds { get { return 120; } }
 
         static readonly string[] Ext = new[] { ".dll", ".winmd" };
         const int MaxUnsignedPerRun = 50;

@@ -10,7 +10,6 @@ namespace Edr
 
         public void Run(CancellationToken ct)
         {
-            EdrLog.Write(Name, "Named pipe monitoring tick", "INFO", "named_pipe.log");
         }
     }
 }

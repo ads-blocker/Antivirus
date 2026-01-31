@@ -10,7 +10,6 @@ namespace Edr
 
         public void Run(CancellationToken ct)
         {
-            EdrLog.Write(Name, "PrivacyForge spoofing tick", "INFO", "privacy_forge.log");
         }
     }
 }

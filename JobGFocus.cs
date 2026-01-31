@@ -7,7 +7,8 @@ namespace Edr
     public sealed class JobGFocus : IEdrJob
     {
         public string Name { get { return "GFocus"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 120; } }
+        static int _tickCount;
 
         public void Run(CancellationToken ct)
         {
@@ -21,7 +22,8 @@ namespace Edr
                     if (c.State != TcpState.Established) continue;
                     est++;
                 }
-                EdrLog.Write(Name, "Established TCP connections: " + est, "INFO", "gfocus.log");
+                if (++_tickCount % 5 == 0)
+                    EdrLog.Write(Name, "Established TCP connections: " + est, "INFO", "gfocus.log");
             }
             catch (Exception ex) { EdrLog.Write(Name, "Error: " + ex.Message, "ERROR", "gfocus.log"); }
         }

@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobCredentialDumpDetection : IEdrJob
     {
         public string Name { get { return "CredentialDumpDetection"; } }
-        public int IntervalSeconds { get { return 15; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] CredentialTools = new[] { "mimikatz", "sekurlsa", "pwdump", "gsecdump", "wce", "procdump", "dumpert", "nanodump", "lsassy", "lsadump", "cachedump" };
 

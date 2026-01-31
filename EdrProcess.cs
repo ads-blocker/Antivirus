@@ -10,6 +10,11 @@ namespace Edr
     public static class EdrProcess
     {
         const uint PROCESS_SUSPEND_RESUME = 0x0800;
+        const int ProcessCacheSeconds = 90;
+        static readonly object _procCacheLock = new object();
+        static List<ProcInfo> _procCache;
+        static int _procCacheTicks;
+
         [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
         [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr hObject);
         [DllImport("ntdll.dll")] static extern int NtSuspendProcess(IntPtr processHandle);
@@ -26,6 +31,13 @@ namespace Edr
 
         public static List<ProcInfo> GetProcesses(CancellationToken ct)
         {
+            int now = Environment.TickCount;
+            lock (_procCacheLock)
+            {
+                if (_procCache != null && (now - _procCacheTicks) < ProcessCacheSeconds * 1000)
+                    return _procCache;
+            }
+
             var list = new List<ProcInfo>();
             try
             {
@@ -46,6 +58,11 @@ namespace Edr
                         };
                         list.Add(p);
                     }
+                }
+                lock (_procCacheLock)
+                {
+                    _procCache = list;
+                    _procCacheTicks = now;
                 }
             }
             catch (Exception ex) { EdrLog.Write("EdrProcess", "GetProcesses error: " + ex.Message, "ERROR"); }

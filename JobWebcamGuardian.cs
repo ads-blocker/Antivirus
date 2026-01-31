@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobWebcamGuardian : IEdrJob
     {
         public string Name { get { return "WebcamGuardian"; } }
-        public int IntervalSeconds { get { return 5; } }
+        public int IntervalSeconds { get { return 60; } }
 
         public void Run(CancellationToken ct)
         {

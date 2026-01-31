@@ -8,7 +8,7 @@ namespace Edr
     public sealed class JobProcessAnomalyDetection : IEdrJob
     {
         public string Name { get { return "ProcessAnomalyDetection"; } }
-        public int IntervalSeconds { get { return 15; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly Regex OfficeParent = new Regex("winword|excel|powerpnt|outlook", RegexOptions.IgnoreCase);
         static readonly Regex ScriptChild = new Regex("powershell|cmd|wscript|cscript", RegexOptions.IgnoreCase);

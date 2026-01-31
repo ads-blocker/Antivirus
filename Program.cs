@@ -13,6 +13,8 @@ static class Program
     static ContextMenuStrip TrayMenu;
     static Form DashboardForm;
     static JobRunner Runner;
+    static System.Threading.Timer StartDelayTimer;
+    const int StartupDelaySeconds = 90;
 
     [STAThread]
     static void Main()
@@ -24,7 +26,10 @@ static class Program
 
             Runner = new JobRunner();
             JobRegistration.RegisterAll(Runner);
-            Runner.Start();
+            StartDelayTimer = new System.Threading.Timer(_ =>
+            {
+                try { Runner.Start(); } catch { }
+            }, null, StartupDelaySeconds * 1000, System.Threading.Timeout.Infinite);
 
             Icon ico = LoadTrayIcon();
             TrayMenu = new ContextMenuStrip();
@@ -51,6 +56,7 @@ static class Program
         }
         finally
         {
+            if (StartDelayTimer != null) { try { StartDelayTimer.Dispose(); } catch { } StartDelayTimer = null; }
             if (TrayIcon != null) { TrayIcon.Visible = false; TrayIcon.Dispose(); TrayIcon = null; }
             if (Runner != null) { try { Runner.Stop(); } catch { } Runner = null; }
         }

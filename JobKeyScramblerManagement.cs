@@ -10,7 +10,6 @@ namespace Edr
 
         public void Run(CancellationToken ct)
         {
-            EdrLog.Write(Name, "Key scrambler management tick", "INFO", "key_scrambler.log");
         }
     }
 }

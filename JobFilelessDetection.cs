@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobFilelessDetection : IEdrJob
     {
         public string Name { get { return "FilelessDetection"; } }
-        public int IntervalSeconds { get { return 20; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] FilelessIndicators = new[] { "-enc ", "-encodedcommand", "iex(", "invoke-expression", "frombase64string", "scriptblock", "reflection.assembly" };
 

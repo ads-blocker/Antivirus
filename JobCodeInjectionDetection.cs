@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobCodeInjectionDetection : IEdrJob
     {
         public string Name { get { return "CodeInjectionDetection"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] Patterns = new[] { "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread", "NtCreateThreadEx", "RtlCreateUserThread", "QueueUserAPC" };
 

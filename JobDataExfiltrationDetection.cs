@@ -7,7 +7,7 @@ namespace Edr
     public sealed class JobDataExfiltrationDetection : IEdrJob
     {
         public string Name { get { return "DataExfiltrationDetection"; } }
-        public int IntervalSeconds { get { return 30; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] Patterns = new[] { "upload", "exfil", "pastebin", "transfer.*http", "webclient.*upload", "ftp.*put", "scp ", "curl.*-T" };
 

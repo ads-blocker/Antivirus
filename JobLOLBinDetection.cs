@@ -8,7 +8,7 @@ namespace Edr
     public sealed class JobLOLBinDetection : IEdrJob
     {
         public string Name { get { return "LOLBinDetection"; } }
-        public int IntervalSeconds { get { return 15; } }
+        public int IntervalSeconds { get { return 90; } }
 
         struct LoLBin { public string Name; public string[] Patterns; public string Severity; public string Description; }
 

@@ -8,7 +8,7 @@ namespace Edr
     public sealed class JobResponseEngine : IEdrJob
     {
         public string Name { get { return "ResponseEngine"; } }
-        public int IntervalSeconds { get { return 10; } }
+        public int IntervalSeconds { get { return 180; } }
 
         static readonly string[] Ext = new[] { ".exe", ".dll", ".sys", ".winmd" };
         const int MaxFilesPerRun = 100;
@@ -42,7 +42,8 @@ namespace Edr
                 catch { }
             }
 
-            EdrLog.Write(Name, "Tick | Threats: " + EdrState.ThreatCount + " | Terminated: " + EdrState.ProcessesTerminated + " | Quarantined: " + EdrState.FilesQuarantined + " | Handled: " + handled, "INFO", "response_engine.log");
+            if (handled > 0 || EdrState.ThreatCount > 0)
+                EdrLog.Write(Name, "Tick | Threats: " + EdrState.ThreatCount + " | Terminated: " + EdrState.ProcessesTerminated + " | Quarantined: " + EdrState.FilesQuarantined + " | Handled: " + handled, "INFO", "response_engine.log");
         }
     }
 }

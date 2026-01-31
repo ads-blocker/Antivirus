@@ -8,7 +8,7 @@ namespace Edr
     public sealed class JobAdvancedThreatDetection : IEdrJob
     {
         public string Name { get { return "AdvancedThreatDetection"; } }
-        public int IntervalSeconds { get { return 20; } }
+        public int IntervalSeconds { get { return 90; } }
 
         static readonly string[] Paths = new[] { @"C:\Windows\Temp", @"C:\Windows\System32\Tasks" };
         static readonly string[] Ext = new[] { ".exe", ".dll", ".ps1", ".vbs" };
