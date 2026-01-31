@@ -54,7 +54,7 @@ class DashboardForm : Form
             Font = new Font("Segoe UI", 18F, FontStyle.Bold),
             ForeColor = TextPrimary,
             AutoSize = true,
-            Location = new Point(24, 18)
+            Location = new Point(24, 8)
         };
         _lblHeaderStatus = new Label
         {
@@ -92,7 +92,6 @@ class DashboardForm : Form
         AddNavButton(sidebar, "Logs", ref y, () => OnLogs());
         AddNavButton(sidebar, "Alerts", ref y, () => OnAlerts());
         AddNavButton(sidebar, "Settings", ref y, () => OnSettings());
-        AddNavButton(sidebar, "Fix slowness", ref y, () => OnFixSlowness());
         y += 24;
         var lblInst = new Label { Text = "Install & persistence", ForeColor = TextMuted, Font = new Font("Segoe UI", 8.5F), AutoSize = true, Location = new Point(16, y) };
         sidebar.Controls.Add(lblInst);
@@ -419,17 +418,6 @@ class DashboardForm : Form
             AddRecent("Info", "Viewed alerts.");
         }
         catch (Exception ex) { MessageBox.Show(this, "Alerts: " + ex.Message, EdrConfig.EDRName, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
-    }
-
-    void OnFixSlowness()
-    {
-        try
-        {
-            JobCredentialProtection.RevertCredentialProtection();
-            MessageBox.Show(this, "Reverted credential protection changes (auditpol, RunAsPPL, CachedLogonsCount).\nReboot if slowness persists.", EdrConfig.EDRName, MessageBoxButtons.OK, MessageBoxIcon.Information);
-            AddRecent("Info", "Reverted credential protection.");
-        }
-        catch (Exception ex) { MessageBox.Show(this, "Fix slowness: " + ex.Message, EdrConfig.EDRName, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
     }
 
     void OnSettings()

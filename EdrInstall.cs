@@ -54,12 +54,20 @@ namespace Edr
                 File.Copy(src, dest, true);
                 string baseDir = Path.GetDirectoryName(src) ?? "";
                 string yaraSrc = Path.Combine(baseDir, EdrConfig.YaraExeName);
-                if (File.Exists(yaraSrc))
+                string yaraSubSrc = Path.Combine(baseDir, EdrConfig.YaraSubFolder, EdrConfig.YaraExeName);
+                string yaraToUse = File.Exists(yaraSrc) ? yaraSrc : (File.Exists(yaraSubSrc) ? yaraSubSrc : null);
+                if (yaraToUse != null)
                 {
-                    string yaraDest = Path.Combine(EdrConfig.InstallPath, EdrConfig.YaraSubFolder, EdrConfig.YaraExeName);
-                    string yaraDir = Path.GetDirectoryName(yaraDest);
+                    string yaraDir = Path.Combine(EdrConfig.InstallPath, EdrConfig.YaraSubFolder);
                     if (!Directory.Exists(yaraDir)) Directory.CreateDirectory(yaraDir);
-                    File.Copy(yaraSrc, yaraDest, true);
+                    File.Copy(yaraToUse, Path.Combine(yaraDir, EdrConfig.YaraExeName), true);
+                    string dllBase = Path.GetDirectoryName(yaraToUse) ?? baseDir;
+                    foreach (string dll in new[] { "vcruntime140.dll", "msvcp140.dll" })
+                    {
+                        string dllSrc = Path.Combine(dllBase, dll);
+                        if (File.Exists(dllSrc))
+                            File.Copy(dllSrc, Path.Combine(yaraDir, dll), true);
+                    }
                 }
                 string rulesSrc = Path.Combine(baseDir, EdrConfig.YaraRulesFileName);
                 if (File.Exists(rulesSrc))

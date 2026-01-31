@@ -21,6 +21,7 @@ static class Program
     {
         try
         {
+            EdrEmbedded.ExtractEmbeddedFiles();
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 

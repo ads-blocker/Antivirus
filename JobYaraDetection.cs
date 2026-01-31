@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 
 namespace Edr
@@ -13,6 +14,40 @@ namespace Edr
 
         const int MaxFilesPerRun = 200;
         const int BatchSize = 40;
+        static readonly string[] VcDlls = { "vcruntime140.dll", "msvcp140.dll" };
+
+        static void EnsureVcRuntimeExtracted(string yaraExePath)
+        {
+            string targetDir = Path.GetDirectoryName(yaraExePath);
+            if (string.IsNullOrEmpty(targetDir)) return;
+            var asm = Assembly.GetExecutingAssembly();
+            if (asm == null) return;
+            string[] names = asm.GetManifestResourceNames();
+            if (names == null) return;
+            foreach (string dllName in VcDlls)
+            {
+                string destPath = Path.Combine(targetDir, dllName);
+                if (File.Exists(destPath)) continue;
+                string resName = null;
+                string suffix = dllName.Replace(".dll", "");
+                foreach (string n in names)
+                {
+                    if (n.EndsWith("." + suffix, StringComparison.OrdinalIgnoreCase) || n.EndsWith("." + dllName, StringComparison.OrdinalIgnoreCase))
+                    { resName = n; break; }
+                }
+                if (resName == null) continue;
+                try
+                {
+                    using (var stream = asm.GetManifestResourceStream(resName))
+                    {
+                        if (stream == null) continue;
+                        using (var fs = File.Create(destPath))
+                            stream.CopyTo(fs);
+                    }
+                }
+                catch { }
+            }
+        }
 
         static string GetYaraExePath()
         {
@@ -57,6 +92,7 @@ namespace Edr
                 EdrLog.Write(Name, "YARA skipped: yara.exe or rules.yar not found (paths: exe next to app, " + EdrConfig.InstallPath + "\\" + EdrConfig.YaraSubFolder + ", " + EdrConfig.DataPath + ").", "INFO", "yara_detections.log");
                 return;
             }
+            EnsureVcRuntimeExtracted(yaraExe);
 
             var files = new List<string>();
             foreach (string path in EdrFile.EnumerateSuspiciousFiles(ct))
